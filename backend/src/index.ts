@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import path from 'path';
 import { logger } from './lib/logger.js';
 import authRoutes from './routes/auth.js';
 import clientRoutes from './routes/clients.js';
@@ -11,6 +12,7 @@ import paymentRoutes from './routes/payments.js';
 import estimateRoutes from './routes/estimates.js';
 import creditNoteRoutes from './routes/credit-notes.js';
 import reportRoutes from './routes/reports.js';
+import attachmentRoutes from './routes/attachments.js';
 import { escalateOverdueInvoices } from './jobs/overdueJob.js';
 
 const app = express();
@@ -26,9 +28,13 @@ app.use('/api/v1/clients', clientRoutes);
 app.use('/api/v1/projects', projectRoutes);
 app.use('/api/v1/invoices', invoiceRoutes);
 app.use('/api/v1/invoices/:id/payments', paymentRoutes);
+app.use('/api/v1/invoices/:id/attachments', attachmentRoutes);
 app.use('/api/v1/estimates', estimateRoutes);
 app.use('/api/v1/credit-notes', creditNoteRoutes);
 app.use('/api/v1/reports', reportRoutes);
+
+// Serve uploaded files
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 

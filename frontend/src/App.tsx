@@ -6,6 +6,7 @@ import { InvoiceListPage } from './pages/invoices/InvoiceListPage';
 import { InvoiceDetailPage } from './pages/invoices/InvoiceDetailPage';
 import { NewInvoicePage } from './pages/invoices/NewInvoicePage';
 import { EstimatesPage } from './pages/estimates/EstimatesPage';
+import { EstimateDetailPage } from './pages/estimates/EstimateDetailPage';
 import { ClientsPage } from './pages/clients/ClientsPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 
@@ -21,6 +22,7 @@ function App() {
           <Route path="/invoices/new" element={<NewInvoicePage />} />
           <Route path="/invoices/:id" element={<InvoiceDetailPage />} />
           <Route path="/estimates" element={<EstimatesPage />} />
+          <Route path="/estimates/:id" element={<EstimateDetailPage />} />
           <Route path="/clients" element={<ClientsPage />} />
           <Route path="/reports" element={<ReportsPage />} />
         </Route>

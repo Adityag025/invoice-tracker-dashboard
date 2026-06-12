@@ -1,13 +1,35 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import { ArrowLeft, Download, Send, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Download, Send, CheckCircle, XCircle, Paperclip, Trash2, ExternalLink, FileText, Image, File } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useInvoice, useUpdateInvoiceStatus } from '../../hooks/useInvoices';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { PageLoader } from '../../components/ui/LoadingSpinner';
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner';
+import { FileUpload } from '../../components/ui/FileUpload';
 import api from '../../lib/api';
+
+interface Attachment {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  storageType: string;
+  uploadedBy?: { name: string };
+  createdAt: string;
+}
+
+function AttachmentIcon({ mime }: { mime: string }) {
+  if (mime === 'application/pdf') return <FileText className="w-4 h-4 text-red-500" />;
+  if (mime.startsWith('image/')) return <Image className="w-4 h-4 text-blue-500" />;
+  return <File className="w-4 h-4 text-gray-500" />;
+}
+
+const fmtSize = (bytes: number) =>
+  bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -15,9 +37,45 @@ const fmt = (n: number) =>
 export const InvoiceDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { data: invoice, isLoading } = useInvoice(id!);
   const updateStatus = useUpdateInvoiceStatus();
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [uploading, setUploading] = useState(false);
+
+  const { data: attachments = [] } = useQuery<Attachment[]>({
+    queryKey: ['attachments', id],
+    queryFn: () => api.get(`/invoices/${id}/attachments`).then(r => r.data),
+    enabled: !!id,
+  });
+
+  const deleteAttachment = useMutation({
+    mutationFn: (attachmentId: string) => api.delete(`/invoices/${id}/attachments/${attachmentId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['attachments', id] });
+      toast.success('File deleted');
+    },
+    onError: () => toast.error('Delete failed'),
+  });
+
+  const handleUpload = async (file: File) => {
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      await api.post(`/invoices/${id}/attachments`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      qc.invalidateQueries({ queryKey: ['attachments', id] });
+      qc.invalidateQueries({ queryKey: ['invoice', id] });
+      toast.success('File uploaded');
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Upload failed';
+      toast.error(msg);
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const downloadPdf = async () => {
     setDownloadingPdf(true);
@@ -139,6 +197,57 @@ export const InvoiceDetailPage = () => {
             <tr className="border-t border-gray-200"><td colSpan={5} className="px-4 py-3 text-right font-bold">Total</td><td className="px-4 py-3 text-right font-bold text-blue-600 text-lg">{fmt(invoice.total)}</td></tr>
           </tfoot>
         </table>
+      </div>
+
+      {/* Attachments */}
+      <div className="card p-5">
+        <div className="flex items-center gap-2 mb-4">
+          <Paperclip className="w-4 h-4 text-gray-500" />
+          <h3 className="font-semibold text-gray-900">Attachments</h3>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{attachments.length}</span>
+        </div>
+
+        {attachments.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {attachments.map((a) => (
+              <div key={a.id} className="flex items-center gap-3 px-3 py-2.5 bg-gray-50 rounded-lg border border-gray-100">
+                <AttachmentIcon mime={a.mimeType} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{a.originalName}</p>
+                  <p className="text-xs text-gray-400">
+                    {fmtSize(a.size)}
+                    {a.uploadedBy && <> · {a.uploadedBy.name}</>}
+                    {' · '}{format(new Date(a.createdAt), 'dd MMM yyyy')}
+                  </p>
+                </div>
+                <a
+                  href={a.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-500 hover:text-blue-700 transition-colors"
+                  title="Open"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => deleteAttachment.mutate(a.id)}
+                  disabled={deleteAttachment.isPending}
+                  className="text-gray-400 hover:text-red-500 transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <FileUpload
+          onUpload={handleUpload}
+          isUploading={uploading}
+          label="Attach invoice document, PO, or any supporting file"
+        />
       </div>
 
       {invoice.events && invoice.events.length > 0 && (

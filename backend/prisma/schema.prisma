@@ -16,11 +16,12 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  invoices      Invoice[]      @relation("InvoiceCreatedBy")
-  estimates     Estimate[]     @relation("EstimateCreatedBy")
-  payments      Payment[]      @relation("PaymentRecordedBy")
+  invoices      Invoice[]           @relation("InvoiceCreatedBy")
+  estimates     Estimate[]          @relation("EstimateCreatedBy")
+  payments      Payment[]           @relation("PaymentRecordedBy")
   invoiceEvents InvoiceEvent[]
   creditNotes   CreditNote[]
+  attachments   InvoiceAttachment[]
 
   @@map("users")
 }
@@ -88,10 +89,11 @@ model Invoice {
   items          InvoiceItem[]
   events         InvoiceEvent[]
   payments       Payment[]
-  creditNotes    CreditNote[]    @relation("OriginalInvoice")
-  replacedBy     CreditNote?     @relation("ReplacementInvoice")
+  creditNotes    CreditNote[]        @relation("OriginalInvoice")
+  replacedBy     CreditNote?         @relation("ReplacementInvoice")
   purchaseOrders PurchaseOrder[]
   reminderLogs   ReminderLog[]
+  attachments    InvoiceAttachment[]
 
   @@index([clientId, status])
   @@index([dueDate, status])
@@ -258,4 +260,23 @@ model ReminderLog {
   invoice Invoice @relation(fields: [invoiceId], references: [id])
 
   @@map("reminder_logs")
+}
+
+model InvoiceAttachment {
+  id           String   @id @default(cuid())
+  invoiceId    String   @map("invoice_id")
+  fileName     String   @map("file_name")
+  originalName String   @map("original_name")
+  mimeType     String   @map("mime_type")
+  size         Int
+  storageType  String   @default("local") @map("storage_type")
+  url          String
+  uploadedById String   @map("uploaded_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  invoice    Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation(fields: [uploadedById], references: [id])
+
+  @@index([invoiceId])
+  @@map("invoice_attachments")
 }

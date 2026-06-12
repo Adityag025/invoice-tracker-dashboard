@@ -1,9 +1,11 @@
-import { Router, Response } from 'express';
+import { Router, Response, Request } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 import { validate } from '../middleware/validate.js';
+import { upload } from '../middleware/upload.js';
+import { storeFile } from '../services/storage.service.js';
 import { calcLineItems, calcTotals } from '../services/gst.service.js';
 import { generateEstimateNumber, generateInvoiceNumber } from '../services/invoice-number.service.js';
 
@@ -134,5 +136,46 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
   const estimate = await prisma.estimate.update({ where: { id: req.params.id }, data: { status } });
   res.json(estimate);
 });
+
+// POST /api/v1/estimates/:id/purchase-order — attach PO document
+router.post(
+  '/:id/purchase-order',
+  (req: Request, res: Response, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upload.single('file')(req as any, res as any, (err) => {
+      if (err) { res.status(400).json({ error: (err as Error).message }); return; }
+      next();
+    });
+  },
+  async (req: AuthRequest, res: Response) => {
+    const poSchema = z.object({
+      poNumber: z.string().min(1),
+      poDate: z.string(),
+      poValue: z.coerce.number().positive(),
+    });
+    const parsed = poSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() }); return; }
+
+    const estimate = await prisma.estimate.findUnique({ where: { id: req.params.id } });
+    if (!estimate) { res.status(404).json({ error: 'Estimate not found' }); return; }
+
+    let documentUrl: string | undefined;
+    if (req.file) {
+      const stored = await storeFile(req.file);
+      documentUrl = stored.url;
+    }
+
+    const po = await prisma.purchaseOrder.create({
+      data: {
+        estimateId: req.params.id,
+        poNumber: parsed.data.poNumber,
+        poDate: new Date(parsed.data.poDate),
+        poValue: parsed.data.poValue,
+        documentUrl,
+      },
+    });
+    res.status(201).json(po);
+  }
+);
 
 export default router;
