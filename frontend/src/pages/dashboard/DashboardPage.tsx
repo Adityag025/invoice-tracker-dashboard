@@ -6,6 +6,9 @@ import api from '../../lib/api';
 import { PageLoader } from '../../components/ui/LoadingSpinner';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { format, isPast } from 'date-fns';
+import { useAuthStore } from '../../stores/authStore';
+import { ROLE_LABEL } from '../../lib/roles';
+import type { UserRole } from '../../types';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -52,8 +55,18 @@ const KPICard = ({ label, value, sub, icon: Icon, iconBg, iconColor, valueColor 
   </div>
 );
 
+const SCOPE_LABEL: Partial<Record<UserRole, string>> = {
+  CEO: 'All agency data',
+  ACCOUNT_DIRECTOR: 'All agency data',
+  POD_HEAD: 'Your POD',
+  ACCOUNT_MANAGER: 'Your invoices',
+  SUB_MANAGER: 'Your invoices',
+};
+
 export const DashboardPage = () => {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const scopeLabel = SCOPE_LABEL[user?.role as UserRole] ?? 'Your data';
 
   const { data: summary, isLoading } = useQuery({
     queryKey: ['reports', 'summary'],
@@ -96,7 +109,13 @@ export const DashboardPage = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Dashboard</h1>
-        <p className="text-gray-500 text-sm mt-0.5">{format(new Date(), 'EEEE, d MMMM yyyy')}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <p className="text-gray-500 text-sm">{format(new Date(), 'EEEE, d MMMM yyyy')}</p>
+          <span className="text-gray-300">·</span>
+          <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+            {ROLE_LABEL[user?.role as UserRole] ?? user?.role} · {scopeLabel}
+          </span>
+        </div>
       </div>
 
       {/* KPI cards */}

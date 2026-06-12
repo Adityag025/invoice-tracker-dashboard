@@ -6,6 +6,7 @@ interface InvoiceFilters {
   clientId?: string;
   projectId?: string;
   status?: string;
+  search?: string;
   page?: number;
   limit?: number;
   sortBy?: string;

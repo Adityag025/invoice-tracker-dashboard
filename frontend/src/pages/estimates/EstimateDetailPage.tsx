@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Upload, ExternalLink, FileText, Sparkles, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Upload, ExternalLink, FileText, Sparkles, AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { StatusBadge } from '../../components/ui/StatusBadge';
@@ -35,6 +35,105 @@ interface Estimate {
   purchaseOrders: PurchaseOrder[];
 }
 
+type EditableItem = { description: string; hsnSac: string; quantity: number; unitRate: number; taxRate: number };
+
+const ConvertModal = ({ estimate, onClose, onConverted }: {
+  estimate: Estimate;
+  onClose: () => void;
+  onConverted: (invoiceId: string) => void;
+}) => {
+  const [items, setItems] = useState<EditableItem[]>(
+    estimate.items.map(i => ({ description: i.description, hsnSac: i.hsnSac ?? '', quantity: i.quantity, unitRate: i.unitRate, taxRate: i.taxRate }))
+  );
+  const [converting, setConverting] = useState(false);
+
+  const liveTotal = items.reduce((s, i) => s + i.quantity * i.unitRate * (1 + i.taxRate / 100), 0);
+
+  const updateItem = (idx: number, field: keyof EditableItem, value: string | number) => {
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
+  };
+  const addItem = () => setItems(prev => [...prev, { description: '', hsnSac: '', quantity: 1, unitRate: 0, taxRate: 18 }]);
+  const removeItem = (idx: number) => setItems(prev => prev.filter((_, i) => i !== idx));
+
+  const handleConvert = async () => {
+    if (items.some(i => !i.description || i.unitRate <= 0 || i.quantity <= 0)) {
+      toast.error('Fill in all line items correctly');
+      return;
+    }
+    setConverting(true);
+    try {
+      const res = await api.post(`/estimates/${estimate.id}/convert`, {
+        items: items.map(i => ({ description: i.description, hsnSac: i.hsnSac || undefined, quantity: Number(i.quantity), unitRate: Number(i.unitRate), taxRate: Number(i.taxRate) })),
+      });
+      onConverted(res.data.id);
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Conversion failed';
+      toast.error(msg);
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-900">Convert to Invoice — Edit Line Items</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><XCircle className="w-5 h-5" /></button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-6 space-y-3">
+          {items.map((item, idx) => (
+            <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+              <div className="col-span-4">
+                {idx === 0 && <label className="label text-xs">Description</label>}
+                <input className="input text-sm" value={item.description} onChange={e => updateItem(idx, 'description', e.target.value)} placeholder="Service description" />
+              </div>
+              <div className="col-span-2">
+                {idx === 0 && <label className="label text-xs">HSN/SAC</label>}
+                <input className="input text-sm" value={item.hsnSac} onChange={e => updateItem(idx, 'hsnSac', e.target.value)} placeholder="998313" />
+              </div>
+              <div className="col-span-2">
+                {idx === 0 && <label className="label text-xs">Qty</label>}
+                <input type="number" className="input text-sm" value={item.quantity} onChange={e => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="col-span-2">
+                {idx === 0 && <label className="label text-xs">Rate (₹)</label>}
+                <input type="number" className="input text-sm" value={item.unitRate} onChange={e => updateItem(idx, 'unitRate', parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="col-span-1">
+                {idx === 0 && <label className="label text-xs">Tax %</label>}
+                <input type="number" className="input text-sm" value={item.taxRate} onChange={e => updateItem(idx, 'taxRate', parseFloat(e.target.value) || 0)} />
+              </div>
+              <div className="col-span-1 flex justify-end pb-0.5">
+                <button onClick={() => removeItem(idx)} disabled={items.length === 1} className="text-gray-300 hover:text-red-500 disabled:opacity-30">
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+          <button className="btn-secondary text-sm w-full" onClick={addItem}>
+            <Plus className="w-4 h-4" /> Add Line Item
+          </button>
+        </div>
+        <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100">
+          <p className="text-sm text-gray-500">
+            Estimated total: <span className="font-bold text-gray-900">
+              {new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(liveTotal)}
+            </span>
+          </p>
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={onClose}>Cancel</button>
+            <button className="btn-primary" onClick={handleConvert} disabled={converting}>
+              <RefreshCw className="w-4 h-4" />
+              {converting ? 'Converting…' : 'Convert to Invoice'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const EstimateDetailPage = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -42,6 +141,7 @@ export const EstimateDetailPage = () => {
   const [uploadingPo, setUploadingPo] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [showPoForm, setShowPoForm] = useState(false);
+  const [showConvertModal, setShowConvertModal] = useState(false);
   const [poFields, setPoFields] = useState({ poNumber: '', poDate: '', poValue: '' });
   const [tempFileId, setTempFileId] = useState<string | null>(null);
   const [extractConfidence, setExtractConfidence] = useState<'high' | 'low' | null>(null);
@@ -62,17 +162,10 @@ export const EstimateDetailPage = () => {
     onError: () => toast.error('Failed to update status'),
   });
 
-  const convertToInvoice = useMutation({
-    mutationFn: () => api.post(`/estimates/${id}/convert`),
-    onSuccess: (res) => {
-      toast.success('Converted to invoice');
-      navigate(`/invoices/${res.data.id}`);
-    },
-    onError: (e: unknown) => {
-      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Conversion failed';
-      toast.error(msg);
-    },
-  });
+  const handleConverted = (invoiceId: string) => {
+    toast.success('Converted to invoice');
+    navigate(`/invoices/${invoiceId}`);
+  };
 
   // Step 1: file dropped → extract fields via Claude
   const handlePoFileDrop = async (file: File) => {
@@ -169,9 +262,8 @@ export const EstimateDetailPage = () => {
             </button>
           )}
           {canConvert && (
-            <button className="btn-primary" onClick={() => convertToInvoice.mutate()} disabled={convertToInvoice.isPending}>
-              <RefreshCw className="w-4 h-4" />
-              {convertToInvoice.isPending ? 'Converting…' : 'Convert to Invoice'}
+            <button className="btn-primary" onClick={() => setShowConvertModal(true)}>
+              <RefreshCw className="w-4 h-4" /> Convert to Invoice
             </button>
           )}
           {!['CONVERTED', 'EXPIRED'].includes(estimate.status) && (
@@ -380,6 +472,14 @@ export const EstimateDetailPage = () => {
           <h3 className="font-semibold text-gray-900 mb-2">Notes</h3>
           <p className="text-sm text-gray-600 whitespace-pre-wrap">{estimate.notes}</p>
         </div>
+      )}
+
+      {showConvertModal && (
+        <ConvertModal
+          estimate={estimate}
+          onClose={() => setShowConvertModal(false)}
+          onConverted={handleConverted}
+        />
       )}
     </div>
   );

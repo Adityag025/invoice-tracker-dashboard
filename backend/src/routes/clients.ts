@@ -19,6 +19,7 @@ const clientSchema = z.object({
   contactEmail: z.string().email(),
   contactPhone: z.string().optional(),
   address: z.string().optional(),
+  podId: z.string().optional().nullable(),
 });
 
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -28,7 +29,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     ? { OR: [{ name: { contains: search, mode: 'insensitive' as const } }, { contactEmail: { contains: search, mode: 'insensitive' as const } }] }
     : {};
   const [clients, total] = await Promise.all([
-    prisma.client.findMany({ where, skip, take: parseInt(limit), orderBy: { name: 'asc' } }),
+    prisma.client.findMany({ where, skip, take: parseInt(limit), orderBy: { name: 'asc' }, include: { pod: { select: { id: true, name: true } } } }),
     prisma.client.count({ where }),
   ]);
   res.json({ clients, total, page: parseInt(page), limit: parseInt(limit) });

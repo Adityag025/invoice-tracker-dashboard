@@ -9,7 +9,7 @@ import { PageLoader } from '../../components/ui/LoadingSpinner';
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
 
-type Tab = 'revenue' | 'aging' | 'gst';
+type Tab = 'revenue' | 'aging' | 'gst' | 'ar-monthly';
 
 interface GstRow {
   month: string;
@@ -22,10 +22,21 @@ interface GstRow {
   grandTotal: number;
 }
 
+interface ArMonthlyRow {
+  label: string;
+  totalRaised: number;
+  totalReceived: number;
+  pendingThisMonth: number;
+  pendingPrevMonths: number;
+  closingAR: number;
+}
+
 export const ReportsPage = () => {
   const [tab, setTab] = useState<Tab>('revenue');
   const [gstFrom, setGstFrom] = useState('');
   const [gstTo, setGstTo] = useState('');
+  const [arMonth, setArMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [arGroupBy, setArGroupBy] = useState<'client' | 'pod' | 'ad'>('client');
 
   const { data: aging, isLoading: loadingAging } = useQuery({
     queryKey: ['reports', 'ar-aging'],
@@ -41,6 +52,12 @@ export const ReportsPage = () => {
     queryKey: ['reports', 'gst', gstFrom, gstTo],
     queryFn: () => api.get('/reports/gst', { params: { from: gstFrom || undefined, to: gstTo || undefined } }).then(r => r.data),
     enabled: tab === 'gst',
+  });
+
+  const { data: arMonthlyData, isLoading: loadingArMonthly } = useQuery({
+    queryKey: ['reports', 'ar-monthly', arMonth, arGroupBy],
+    queryFn: () => api.get('/reports/ar-monthly', { params: { month: arMonth, groupBy: arGroupBy } }).then(r => r.data) as Promise<{ month: string; groupBy: string; rows: ArMonthlyRow[] }>,
+    enabled: tab === 'ar-monthly',
   });
 
   const revenueData = revenue
@@ -69,9 +86,18 @@ export const ReportsPage = () => {
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `gst-report-${gstFrom || 'all'}.csv`;
-    a.click();
+    a.href = url; a.download = `gst-report-${gstFrom || 'all'}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadArCsv = () => {
+    const rows = arMonthlyData?.rows ?? [];
+    const headers = ['Group', 'Total Raised', 'Total Received', 'Pending (This Month)', 'Pending (Prev Months)', 'Closing AR'];
+    const lines = rows.map(r => [r.label, r.totalRaised, r.totalReceived, r.pendingThisMonth, r.pendingPrevMonths, r.closingAR].join(','));
+    const csv = [headers.join(','), ...lines].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `ar-monthly-${arMonth}.csv`; a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -79,6 +105,7 @@ export const ReportsPage = () => {
     { key: 'revenue', label: 'Revenue' },
     { key: 'aging', label: 'AR Aging' },
     { key: 'gst', label: 'GST Report' },
+    { key: 'ar-monthly', label: 'Monthly AR' },
   ];
 
   return (
@@ -89,7 +116,7 @@ export const ReportsPage = () => {
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit flex-wrap">
         {TABS.map(t => (
           <button
             key={t.key}
@@ -184,72 +211,141 @@ export const ReportsPage = () => {
       )}
 
       {tab === 'gst' && (
-        <>
-          <div className="card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-gray-900">GST Summary — GSTR-1 Style</h2>
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-gray-500">From</label>
-                  <input type="month" className="input text-sm py-1.5" value={gstFrom} onChange={e => setGstFrom(e.target.value)} />
-                </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs text-gray-500">To</label>
-                  <input type="month" className="input text-sm py-1.5" value={gstTo} onChange={e => setGstTo(e.target.value)} />
-                </div>
-                {gstRows.length > 0 && (
-                  <button className="btn-secondary text-sm" onClick={downloadGstCsv}>
-                    <Download className="w-4 h-4" /> CSV
-                  </button>
-                )}
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold text-gray-900">GST Summary — GSTR-1 Style</h2>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500">From</label>
+                <input type="month" className="input text-sm py-1.5" value={gstFrom} onChange={e => setGstFrom(e.target.value)} />
               </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500">To</label>
+                <input type="month" className="input text-sm py-1.5" value={gstTo} onChange={e => setGstTo(e.target.value)} />
+              </div>
+              {gstRows.length > 0 && (
+                <button className="btn-secondary text-sm" onClick={downloadGstCsv}>
+                  <Download className="w-4 h-4" /> CSV
+                </button>
+              )}
+            </div>
+          </div>
+
+          {loadingGst ? <PageLoader /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Month</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Invoices</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Taxable Value</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600 bg-blue-50/50">CGST</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600 bg-blue-50/50">SGST</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600 bg-purple-50/50">IGST</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Total Tax</th>
+                    <th className="text-right px-4 py-3 font-medium text-gray-600">Grand Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {gstRows.length === 0 && (
+                    <tr><td colSpan={8} className="text-center py-10 text-gray-400">No data for selected period</td></tr>
+                  )}
+                  {gstRows.map(row => (
+                    <tr key={row.month} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 font-medium text-gray-900">{format(new Date(row.month + '-01'), 'MMM yyyy')}</td>
+                      <td className="px-4 py-3 text-right text-gray-500">{row.invoiceCount}</td>
+                      <td className="px-4 py-3 text-right font-medium">{fmt(row.taxable)}</td>
+                      <td className="px-4 py-3 text-right text-blue-700 bg-blue-50/30">{row.cgst > 0 ? fmt(row.cgst) : '—'}</td>
+                      <td className="px-4 py-3 text-right text-blue-700 bg-blue-50/30">{row.sgst > 0 ? fmt(row.sgst) : '—'}</td>
+                      <td className="px-4 py-3 text-right text-purple-700 bg-purple-50/30">{row.igst > 0 ? fmt(row.igst) : '—'}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(row.totalTax)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-blue-600">{fmt(row.grandTotal)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {gstRows.length > 1 && (
+                  <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                    <tr className="font-bold">
+                      <td className="px-4 py-3 text-gray-700">Total</td>
+                      <td className="px-4 py-3 text-right">{gstRows.reduce((s, r) => s + r.invoiceCount, 0)}</td>
+                      <td className="px-4 py-3 text-right">{fmt(gstRows.reduce((s, r) => s + r.taxable, 0))}</td>
+                      <td className="px-4 py-3 text-right text-blue-700">{fmt(gstRows.reduce((s, r) => s + r.cgst, 0))}</td>
+                      <td className="px-4 py-3 text-right text-blue-700">{fmt(gstRows.reduce((s, r) => s + r.sgst, 0))}</td>
+                      <td className="px-4 py-3 text-right text-purple-700">{fmt(gstRows.reduce((s, r) => s + r.igst, 0))}</td>
+                      <td className="px-4 py-3 text-right">{fmt(gstRows.reduce((s, r) => s + r.totalTax, 0))}</td>
+                      <td className="px-4 py-3 text-right text-blue-600">{fmt(gstRows.reduce((s, r) => s + r.grandTotal, 0))}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'ar-monthly' && (
+        <div className="space-y-5">
+          <div className="card p-5">
+            <div className="flex flex-wrap items-center gap-3 mb-5">
+              <h2 className="font-semibold text-gray-900 flex-1">Monthly AR Report</h2>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500">Month</label>
+                <input type="month" className="input text-sm py-1.5" value={arMonth} onChange={e => setArMonth(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500">Group by</label>
+                <select className="input text-sm py-1.5 w-auto" value={arGroupBy} onChange={e => setArGroupBy(e.target.value as 'client' | 'pod' | 'ad')}>
+                  <option value="client">Client</option>
+                  <option value="pod">POD</option>
+                  <option value="ad">Account Director</option>
+                </select>
+              </div>
+              {(arMonthlyData?.rows?.length ?? 0) > 0 && (
+                <button className="btn-secondary text-sm" onClick={downloadArCsv}>
+                  <Download className="w-4 h-4" /> CSV
+                </button>
+              )}
             </div>
 
-            {loadingGst ? <PageLoader /> : (
+            {loadingArMonthly ? <PageLoader /> : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
-                      <th className="text-left px-4 py-3 font-medium text-gray-600">Month</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600">Invoices</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600">Taxable Value</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600 bg-blue-50/50">CGST</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600 bg-blue-50/50">SGST</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600 bg-purple-50/50">IGST</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600">Total Tax</th>
-                      <th className="text-right px-4 py-3 font-medium text-gray-600">Grand Total</th>
+                      <th className="text-left px-4 py-3 font-medium text-gray-600">
+                        {arGroupBy === 'client' ? 'Client' : arGroupBy === 'pod' ? 'POD' : 'Account Director'}
+                      </th>
+                      <th className="text-right px-4 py-3 font-medium text-gray-600">Total Raised</th>
+                      <th className="text-right px-4 py-3 font-medium text-gray-600">Total Received</th>
+                      <th className="text-right px-4 py-3 font-medium text-gray-600">Pending (This Month)</th>
+                      <th className="text-right px-4 py-3 font-medium text-gray-600">Pending (Prev Months)</th>
+                      <th className="text-right px-4 py-3 font-medium text-gray-600 text-red-600">Closing AR</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {gstRows.length === 0 && (
-                      <tr><td colSpan={8} className="text-center py-10 text-gray-400">No data for selected period</td></tr>
+                    {(!arMonthlyData?.rows?.length) && (
+                      <tr><td colSpan={6} className="text-center py-10 text-gray-400">No data for selected month</td></tr>
                     )}
-                    {gstRows.map(row => (
-                      <tr key={row.month} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                        <td className="px-4 py-3 font-medium text-gray-900">
-                          {format(new Date(row.month + '-01'), 'MMM yyyy')}
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-500">{row.invoiceCount}</td>
-                        <td className="px-4 py-3 text-right font-medium">{fmt(row.taxable)}</td>
-                        <td className="px-4 py-3 text-right text-blue-700 bg-blue-50/30">{row.cgst > 0 ? fmt(row.cgst) : '—'}</td>
-                        <td className="px-4 py-3 text-right text-blue-700 bg-blue-50/30">{row.sgst > 0 ? fmt(row.sgst) : '—'}</td>
-                        <td className="px-4 py-3 text-right text-purple-700 bg-purple-50/30">{row.igst > 0 ? fmt(row.igst) : '—'}</td>
-                        <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(row.totalTax)}</td>
-                        <td className="px-4 py-3 text-right font-bold text-blue-600">{fmt(row.grandTotal)}</td>
+                    {arMonthlyData?.rows?.map((row, i) => (
+                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-gray-900">{row.label}</td>
+                        <td className="px-4 py-3 text-right text-gray-700">{fmt(row.totalRaised)}</td>
+                        <td className="px-4 py-3 text-right text-green-700">{fmt(row.totalReceived)}</td>
+                        <td className="px-4 py-3 text-right text-amber-700">{fmt(row.pendingThisMonth)}</td>
+                        <td className="px-4 py-3 text-right text-orange-700">{fmt(row.pendingPrevMonths)}</td>
+                        <td className="px-4 py-3 text-right font-bold text-red-600">{fmt(row.closingAR)}</td>
                       </tr>
                     ))}
                   </tbody>
-                  {gstRows.length > 1 && (
-                    <tfoot className="bg-gray-50 border-t-2 border-gray-200">
-                      <tr className="font-bold">
+                  {(arMonthlyData?.rows?.length ?? 0) > 1 && (
+                    <tfoot className="bg-gray-50 border-t-2 border-gray-200 font-bold">
+                      <tr>
                         <td className="px-4 py-3 text-gray-700">Total</td>
-                        <td className="px-4 py-3 text-right">{gstRows.reduce((s, r) => s + r.invoiceCount, 0)}</td>
-                        <td className="px-4 py-3 text-right">{fmt(gstRows.reduce((s, r) => s + r.taxable, 0))}</td>
-                        <td className="px-4 py-3 text-right text-blue-700">{fmt(gstRows.reduce((s, r) => s + r.cgst, 0))}</td>
-                        <td className="px-4 py-3 text-right text-blue-700">{fmt(gstRows.reduce((s, r) => s + r.sgst, 0))}</td>
-                        <td className="px-4 py-3 text-right text-purple-700">{fmt(gstRows.reduce((s, r) => s + r.igst, 0))}</td>
-                        <td className="px-4 py-3 text-right">{fmt(gstRows.reduce((s, r) => s + r.totalTax, 0))}</td>
-                        <td className="px-4 py-3 text-right text-blue-600">{fmt(gstRows.reduce((s, r) => s + r.grandTotal, 0))}</td>
+                        <td className="px-4 py-3 text-right">{fmt(arMonthlyData!.rows.reduce((s, r) => s + r.totalRaised, 0))}</td>
+                        <td className="px-4 py-3 text-right text-green-700">{fmt(arMonthlyData!.rows.reduce((s, r) => s + r.totalReceived, 0))}</td>
+                        <td className="px-4 py-3 text-right text-amber-700">{fmt(arMonthlyData!.rows.reduce((s, r) => s + r.pendingThisMonth, 0))}</td>
+                        <td className="px-4 py-3 text-right text-orange-700">{fmt(arMonthlyData!.rows.reduce((s, r) => s + r.pendingPrevMonths, 0))}</td>
+                        <td className="px-4 py-3 text-right text-red-600">{fmt(arMonthlyData!.rows.reduce((s, r) => s + r.closingAR, 0))}</td>
                       </tr>
                     </tfoot>
                   )}
@@ -257,7 +353,7 @@ export const ReportsPage = () => {
               </div>
             )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );

@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { format } from 'date-fns';
-import { UserPlus, Pencil, Trash2, X, ShieldCheck } from 'lucide-react';
+import { UserPlus, Pencil, Trash2, X, ShieldCheck, Layers, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useAuthStore } from '../../stores/authStore';
-import { ROLE_LABEL, ROLE_COLOR, ROLE_LEVEL, manageableRoles } from '../../lib/roles';
+import { ROLE_LABEL, ROLE_COLOR, ROLE_LEVEL, manageableRoles, hasMinRole } from '../../lib/roles';
 import type { UserRole } from '../../types';
 import api from '../../lib/api';
 
@@ -109,21 +109,133 @@ function UserModal({
   );
 }
 
+interface Pod {
+  id: string;
+  name: string;
+  podHeadId?: string | null;
+  accountDirectorId?: string | null;
+  podHead?: { id: string; name: string } | null;
+  accountDirector?: { id: string; name: string } | null;
+  _count?: { clients: number };
+  active: boolean;
+  createdAt: string;
+}
+
+interface TeamMemberLight {
+  id: string;
+  name: string;
+  role: UserRole;
+}
+
+const podSchema = z.object({
+  name: z.string().min(1, 'Name required'),
+  podHeadId: z.string().optional().nullable(),
+  accountDirectorId: z.string().optional().nullable(),
+});
+type PodFormData = z.infer<typeof podSchema>;
+
+function PodModal({ pod, podHeads, directors, onClose, onSave, isSaving }: {
+  pod?: Pod;
+  podHeads: TeamMemberLight[];
+  directors: TeamMemberLight[];
+  onClose: () => void;
+  onSave: (data: PodFormData) => void;
+  isSaving: boolean;
+}) {
+  const { register, handleSubmit, formState: { errors } } = useForm<PodFormData>({
+    resolver: zodResolver(podSchema),
+    defaultValues: {
+      name: pod?.name ?? '',
+      podHeadId: pod?.podHeadId ?? '',
+      accountDirectorId: pod?.accountDirectorId ?? '',
+    },
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Layers className="w-5 h-5 text-indigo-500" />
+            <h2 className="text-lg font-semibold text-gray-900">{pod ? 'Edit POD' : 'New POD'}</h2>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <form onSubmit={handleSubmit(onSave)} className="px-6 py-5 space-y-4">
+          <div>
+            <label className="label">POD Name *</label>
+            <input {...register('name')} className="input" placeholder="Growth POD" />
+            {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name.message}</p>}
+          </div>
+          <div>
+            <label className="label">Account Director</label>
+            <select {...register('accountDirectorId')} className="input">
+              <option value="">None</option>
+              {directors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="label">Pod Head</label>
+            <select {...register('podHeadId')} className="input">
+              <option value="">None</option>
+              {podHeads.map(ph => <option key={ph.id} value={ph.id}>{ph.name}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-3 pt-1">
+            <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+            <button type="submit" disabled={isSaving} className="btn-primary flex-1">{isSaving ? 'Saving…' : pod ? 'Save Changes' : 'Create POD'}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export const TeamPage = () => {
   const qc = useQueryClient();
   const { user: me } = useAuthStore();
+  const [tab, setTab] = useState<'members' | 'pods'>('members');
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<TeamMember | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState<TeamMember | null>(null);
+  const [showPodModal, setShowPodModal] = useState(false);
+  const [editingPod, setEditingPod] = useState<Pod | undefined>(undefined);
 
   const myRole = me?.role ?? '';
   const myLevel = ROLE_LEVEL[myRole as UserRole] ?? 0;
   const allowed = manageableRoles(myRole);
   const canAddAny = allowed.length > 0;
+  const canManagePods = hasMinRole(myRole, 'ACCOUNT_DIRECTOR');
 
   const { data: members = [], isLoading } = useQuery<TeamMember[]>({
     queryKey: ['users'],
     queryFn: () => api.get('/users').then(r => r.data),
+  });
+
+  const { data: pods = [], isLoading: podsLoading } = useQuery<Pod[]>({
+    queryKey: ['pods'],
+    queryFn: () => api.get('/pods').then(r => r.data),
+  });
+
+  const podHeads = (members as TeamMemberLight[]).filter(m => m.role === 'POD_HEAD');
+  const directors = (members as TeamMemberLight[]).filter(m => m.role === 'ACCOUNT_DIRECTOR' || m.role === 'CEO');
+
+  const createPod = useMutation({
+    mutationFn: (data: PodFormData) => api.post('/pods', data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pods'] }); toast.success('POD created'); setShowPodModal(false); },
+    onError: (e: unknown) => toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed'),
+  });
+
+  const updatePod = useMutation({
+    mutationFn: ({ id, ...data }: PodFormData & { id: string }) => api.patch(`/pods/${id}`, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pods'] }); toast.success('POD updated'); setEditingPod(undefined); },
+    onError: (e: unknown) => toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed'),
+  });
+
+  const deletePod = useMutation({
+    mutationFn: (id: string) => api.delete(`/pods/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['pods'] }); toast.success('POD deactivated'); },
+    onError: (e: unknown) => toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed'),
   });
 
   const createMember = useMutation({
@@ -159,14 +271,90 @@ export const TeamPage = () => {
           <h1 className="text-2xl font-bold text-gray-900">Team</h1>
           <p className="text-sm text-gray-500 mt-0.5">{members.length} member{members.length !== 1 ? 's' : ''}</p>
         </div>
-        {canAddAny && (
-          <button onClick={() => setShowModal(true)} className="btn-primary">
-            <UserPlus className="w-4 h-4" /> Add Member
-          </button>
-        )}
+        <div className="flex gap-2">
+          {tab === 'members' && canAddAny && (
+            <button onClick={() => setShowModal(true)} className="btn-primary">
+              <UserPlus className="w-4 h-4" /> Add Member
+            </button>
+          )}
+          {tab === 'pods' && canManagePods && (
+            <button onClick={() => setShowPodModal(true)} className="btn-primary">
+              <Layers className="w-4 h-4" /> New POD
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setTab('members')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === 'members' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <Users className="w-4 h-4" /> Members
+        </button>
+        <button
+          onClick={() => setTab('pods')}
+          className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${tab === 'pods' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+        >
+          <Layers className="w-4 h-4" /> PODs
+        </button>
+      </div>
+
+      {tab === 'pods' && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          {podsLoading ? (
+            <div className="py-12 text-center text-gray-400">Loading…</div>
+          ) : pods.length === 0 ? (
+            <div className="py-12 text-center text-gray-400">No PODs created yet.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">POD Name</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Account Director</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Pod Head</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Clients</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {pods.map(pod => (
+                  <tr key={pod.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-indigo-50 rounded-lg flex items-center justify-center">
+                          <Layers className="w-4 h-4 text-indigo-500" />
+                        </div>
+                        <span className="font-medium text-gray-900">{pod.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5 text-gray-600">{pod.accountDirector?.name ?? '—'}</td>
+                    <td className="px-4 py-3.5 text-gray-600">{pod.podHead?.name ?? '—'}</td>
+                    <td className="px-4 py-3.5">
+                      <span className="text-xs font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{pod._count?.clients ?? 0}</span>
+                    </td>
+                    <td className="px-4 py-3.5">
+                      {canManagePods && (
+                        <div className="flex items-center gap-1 justify-end">
+                          <button onClick={() => setEditingPod(pod)} className="w-7 h-7 rounded-lg hover:bg-blue-50 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => deletePod.mutate(pod.id)} className="w-7 h-7 rounded-lg hover:bg-red-50 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+
+      {tab === 'members' && <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         {isLoading ? (
           <div className="py-12 text-center text-gray-400">Loading…</div>
         ) : members.length === 0 ? (
@@ -226,6 +414,8 @@ export const TeamPage = () => {
         )}
       </div>
 
+      </div>}
+
       {/* Role legend */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Role Permissions</h3>
@@ -243,6 +433,21 @@ export const TeamPage = () => {
           ))}
         </div>
       </div>
+
+      {(showPodModal || editingPod) && (
+        <PodModal
+          pod={editingPod}
+          podHeads={podHeads}
+          directors={directors}
+          onClose={() => { setShowPodModal(false); setEditingPod(undefined); }}
+          isSaving={createPod.isPending || updatePod.isPending}
+          onSave={(data) => {
+            const clean = { ...data, podHeadId: data.podHeadId || null, accountDirectorId: data.accountDirectorId || null };
+            if (editingPod) updatePod.mutate({ ...clean, id: editingPod.id });
+            else createPod.mutate(clean);
+          }}
+        />
+      )}
 
       {(showModal || editing) && (
         <UserModal

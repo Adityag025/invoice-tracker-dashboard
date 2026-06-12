@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Search } from 'lucide-react';
 import { format } from 'date-fns';
@@ -13,10 +13,17 @@ const fmt = (n: number) =>
 export const EstimatesPage = () => {
   const navigate = useNavigate();
   const [status, setStatus] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['estimates', { status }],
-    queryFn: () => api.get('/estimates', { params: { status: status || undefined } }).then(r => r.data),
+    queryKey: ['estimates', { status, search }],
+    queryFn: () => api.get('/estimates', { params: { status: status || undefined, search: search || undefined } }).then(r => r.data),
   });
 
   return (
@@ -34,7 +41,12 @@ export const EstimatesPage = () => {
       <div className="card p-4 flex gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input className="input pl-9" placeholder="Search estimates…" readOnly />
+          <input
+            className="input pl-9"
+            placeholder="Search estimates…"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+          />
         </div>
         <select className="input w-auto" value={status} onChange={e => setStatus(e.target.value)}>
           <option value="">All statuses</option>

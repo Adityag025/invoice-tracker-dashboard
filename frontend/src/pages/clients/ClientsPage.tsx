@@ -5,8 +5,10 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import toast from 'react-hot-toast';
+import { useQuery } from '@tanstack/react-query';
 import { useClients, useCreateClient } from '../../hooks/useClients';
 import { PageLoader } from '../../components/ui/LoadingSpinner';
+import api from '../../lib/api';
 
 const INDIAN_STATES = [
   ['01', 'Jammu & Kashmir'], ['02', 'Himachal Pradesh'], ['03', 'Punjab'], ['04', 'Chandigarh'],
@@ -30,6 +32,7 @@ const schema = z.object({
   contactEmail: z.string().email('Invalid email'),
   contactPhone: z.string().optional(),
   address: z.string().optional(),
+  podId: z.string().optional().nullable(),
 });
 type FormData = z.infer<typeof schema>;
 
@@ -39,6 +42,11 @@ export const ClientsPage = () => {
   const [showForm, setShowForm] = useState(false);
   const { data, isLoading } = useClients(search || undefined);
   const createClient = useCreateClient();
+
+  const { data: pods = [] } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ['pods'],
+    queryFn: () => api.get('/pods').then(r => r.data),
+  });
 
   const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -126,6 +134,15 @@ export const ClientsPage = () => {
               <label className="label">Address</label>
               <input {...register('address')} className="input" placeholder="Office address" />
             </div>
+            {pods.length > 0 && (
+              <div>
+                <label className="label">POD Assignment</label>
+                <select {...register('podId')} className="input">
+                  <option value="">No POD</option>
+                  {pods.map(pod => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
+                </select>
+              </div>
+            )}
             <div className="col-span-2 flex justify-end gap-3">
               <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Cancel</button>
               <button type="submit" className="btn-primary" disabled={isSubmitting}>

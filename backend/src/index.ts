@@ -19,6 +19,8 @@ import paymentLinkRoutes from './routes/payment-links.js';
 import webhookRoutes from './routes/webhooks.js';
 import poExtractRoutes from './routes/po-extract.js';
 import userRoutes from './routes/users.js';
+import notificationRoutes from './routes/notifications.js';
+import podRoutes from './routes/pods.js';
 import { escalateOverdueInvoices } from './jobs/overdueJob.js';
 import { processReminders } from './jobs/reminderJob.js';
 
@@ -43,6 +45,8 @@ app.use('/webhooks', webhookRoutes);
 app.use('/api/v1/estimates', estimateRoutes);
 app.use('/api/v1/po', poExtractRoutes);
 app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/pods', podRoutes);
 app.use('/api/v1/credit-notes', creditNoteRoutes);
 app.use('/api/v1/reports', reportRoutes);
 

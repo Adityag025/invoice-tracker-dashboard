@@ -15,7 +15,7 @@ const NAV = [
   { to: '/team',         label: 'Team',         icon: UsersRound,       minRole: 'ACCOUNT_MANAGER' as UserRole },
 ];
 
-export const Sidebar = () => {
+export const Sidebar = ({ onClose }: { onClose?: () => void }) => {
   const { user, logout } = useAuthStore();
 
   const visibleNav = NAV.filter(item =>
@@ -45,6 +45,7 @@ export const Sidebar = () => {
                 isActive ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
               )
             }
+            onClick={onClose}
           >
             <Icon className="w-4 h-4 shrink-0" />
             {label}

@@ -43,12 +43,18 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
 };
 
 router.get('/', async (req: AuthRequest, res: Response) => {
-  const { clientId, projectId, status, page = '1', limit = '20', sortBy = 'createdAt', order = 'desc' } = req.query as Record<string, string>;
+  const { clientId, projectId, status, search, page = '1', limit = '20', sortBy = 'createdAt', order = 'desc' } = req.query as Record<string, string>;
   const skip = (parseInt(page) - 1) * parseInt(limit);
   const where: Record<string, unknown> = {};
   if (clientId) where.clientId = clientId;
   if (projectId) where.projectId = projectId;
   if (status) where.status = status;
+  if (search) {
+    where.OR = [
+      { invoiceNumber: { contains: search } },
+      { client: { name: { contains: search } } },
+    ];
+  }
 
   const [invoices, total] = await Promise.all([
     prisma.invoice.findMany({
@@ -145,6 +151,28 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
 
   logger.info('Invoice status updated', { invoiceId: updated.id, from: invoice.status, to: status });
   res.json(updated);
+});
+
+router.post('/bulk-remind', async (req: AuthRequest, res: Response) => {
+  const { ids } = req.body as { ids: string[] };
+  if (!Array.isArray(ids) || ids.length === 0) { res.status(400).json({ error: 'ids required' }); return; }
+
+  const invoices = await prisma.invoice.findMany({
+    where: { id: { in: ids }, status: { in: ['SENT', 'VIEWED', 'PART_PAID', 'OVERDUE'] } },
+    include: { client: { select: { name: true, contactEmail: true } } },
+  });
+
+  await prisma.reminderLog.createMany({
+    data: invoices.map(inv => ({
+      invoiceId: inv.id,
+      reminderType: 'MANUAL_BULK',
+      sentAt: new Date(),
+      emailTo: inv.client.contactEmail,
+      status: 'QUEUED',
+    })),
+  });
+
+  res.json({ sent: invoices.length, skipped: ids.length - invoices.length });
 });
 
 router.get('/:id/pdf', async (req: AuthRequest, res: Response) => {

@@ -32,11 +32,17 @@ const estimateSchema = z.object({
 });
 
 router.get('/', async (req: AuthRequest, res: Response) => {
-  const { clientId, status, page = '1', limit = '20' } = req.query as Record<string, string>;
+  const { clientId, status, search, page = '1', limit = '20' } = req.query as Record<string, string>;
   const skip = (parseInt(page) - 1) * parseInt(limit);
   const where: Record<string, unknown> = {};
   if (clientId) where.clientId = clientId;
   if (status) where.status = status;
+  if (search) {
+    where.OR = [
+      { estimateNumber: { contains: search } },
+      { client: { name: { contains: search } } },
+    ];
+  }
 
   const [estimates, total] = await Promise.all([
     prisma.estimate.findMany({
@@ -102,6 +108,21 @@ router.post('/:id/convert', async (req: AuthRequest, res: Response) => {
   const invoiceNumber = await generateInvoiceNumber();
   const latestPO = estimate.purchaseOrders[estimate.purchaseOrders.length - 1];
 
+  const rawItems = req.body.items as Array<{ description: string; hsnSac?: string; quantity: number; unitRate: number; taxRate: number }> | undefined;
+
+  type ItemToCreate = { description: string; hsnSac?: string | null; quantity: number; unitRate: number; taxRate: number; taxType: string; lineTotal: number };
+  let lineItems: ItemToCreate[];
+  let subtotal: number, taxTotal: number, total: number;
+
+  if (rawItems && rawItems.length > 0) {
+    const calced = calcLineItems(rawItems, estimate.client.stateCode);
+    ({ subtotal, taxTotal, total } = calcTotals(calced));
+    lineItems = calced;
+  } else {
+    lineItems = estimate.items.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }) => ({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }));
+    ({ subtotal, taxTotal, total } = { subtotal: estimate.subtotal, taxTotal: estimate.taxTotal, total: estimate.total });
+  }
+
   const invoice = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const inv = await tx.invoice.create({
       data: {
@@ -110,13 +131,13 @@ router.post('/:id/convert', async (req: AuthRequest, res: Response) => {
         projectId: estimate.projectId,
         issueDate: new Date(),
         dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        subtotal: estimate.subtotal,
-        taxTotal: estimate.taxTotal,
-        total: estimate.total,
+        subtotal,
+        taxTotal,
+        total,
         poNumber: latestPO?.poNumber,
         createdById: req.user!.userId,
         items: {
-          create: estimate.items.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }: { description: string; hsnSac: string | null; quantity: number; unitRate: number; taxRate: number; taxType: string; lineTotal: number }) => ({
+          create: lineItems.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }) => ({
             description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal,
           })),
         },
