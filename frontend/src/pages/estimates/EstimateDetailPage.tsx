@@ -243,7 +243,7 @@ export const EstimateDetailPage = () => {
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-gray-900">{estimate.estimateNumber}</h1>
+          <h1 className="text-[28px] font-semibold text-on-surface">{estimate.estimateNumber}</h1>
           <div className="flex items-center gap-2 mt-1">
             <StatusBadge status={estimate.status} />
             <span className="text-gray-400 text-sm">•</span>

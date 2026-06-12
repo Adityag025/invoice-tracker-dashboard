@@ -5,6 +5,8 @@ import { X } from 'lucide-react';
 
 const schema = z.object({
   amount: z.coerce.number().positive('Amount must be positive'),
+  tdsAmount: z.coerce.number().min(0).optional().default(0),
+  tdsCertNumber: z.string().optional(),
   paymentDate: z.string().min(1, 'Date is required'),
   method: z.enum(['NEFT', 'RTGS', 'UPI', 'CHEQUE', 'CASH']),
   referenceNumber: z.string().optional(),
@@ -93,6 +95,18 @@ export const RecordPaymentModal = ({ invoiceTotal, paidSoFar, onConfirm, onClose
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Reference / UTR Number</label>
             <input type="text" {...register('referenceNumber')} className="input" placeholder="Optional" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">TDS Deducted (₹)</label>
+              <input type="number" step="0.01" {...register('tdsAmount')} className="input" placeholder="0" />
+              <p className="text-xs text-gray-400 mt-0.5">If client deducted TDS</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">TDS Cert. No.</label>
+              <input type="text" {...register('tdsCertNumber')} className="input" placeholder="Optional" />
+            </div>
           </div>
 
           <div>

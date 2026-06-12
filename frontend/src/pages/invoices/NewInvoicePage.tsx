@@ -68,7 +68,7 @@ export const NewInvoicePage = () => {
     <div className="max-w-4xl space-y-6">
       <div className="flex items-center gap-4">
         <button onClick={() => navigate('/invoices')} className="btn-secondary"><ArrowLeft className="w-4 h-4" /> Back</button>
-        <h1 className="text-2xl font-bold text-gray-900">New Invoice</h1>
+        <h1 className="text-[28px] font-semibold text-on-surface">New Invoice</h1>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">

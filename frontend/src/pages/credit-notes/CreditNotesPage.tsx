@@ -29,8 +29,8 @@ export const CreditNotesPage = () => {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Credit Notes</h1>
-        <p className="text-gray-500 text-sm mt-0.5">{creditNotes.length} total credit notes</p>
+        <h1 className="text-[28px] font-semibold text-on-surface">Credit Notes</h1>
+        <p className="text-outline text-sm mt-0.5">{creditNotes.length} total credit notes</p>
       </div>
 
       <div className="card overflow-hidden">

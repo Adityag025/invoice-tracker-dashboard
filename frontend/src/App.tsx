@@ -12,6 +12,10 @@ import { ClientDetailPage } from './pages/clients/ClientDetailPage';
 import { CreditNotesPage } from './pages/credit-notes/CreditNotesPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 import { TeamPage } from './pages/team/TeamPage';
+import { ProjectsListPage } from './pages/projects/ProjectsListPage';
+import { ProjectDetailPage } from './pages/projects/ProjectDetailPage';
+import { ApprovalsPage } from './pages/approvals/ApprovalsPage';
+import { SettingsPage } from './pages/settings/SettingsPage';
 
 function App() {
   return (
@@ -31,6 +35,10 @@ function App() {
           <Route path="/clients/:id" element={<ClientDetailPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/team" element={<TeamPage />} />
+          <Route path="/projects" element={<ProjectsListPage />} />
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/approvals" element={<ApprovalsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

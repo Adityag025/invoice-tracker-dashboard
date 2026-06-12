@@ -21,6 +21,7 @@ import poExtractRoutes from './routes/po-extract.js';
 import userRoutes from './routes/users.js';
 import notificationRoutes from './routes/notifications.js';
 import podRoutes from './routes/pods.js';
+import settingsRoutes from './routes/settings.js';
 import { escalateOverdueInvoices } from './jobs/overdueJob.js';
 import { processReminders } from './jobs/reminderJob.js';
 
@@ -49,6 +50,7 @@ app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/pods', podRoutes);
 app.use('/api/v1/credit-notes', creditNoteRoutes);
 app.use('/api/v1/reports', reportRoutes);
+app.use('/api/v1/settings', settingsRoutes);
 
 // Serve uploaded files
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));

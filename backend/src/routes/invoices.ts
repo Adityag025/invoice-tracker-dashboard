@@ -8,6 +8,14 @@ import { calcLineItems, calcTotals } from '../services/gst.service.js';
 import { generateInvoiceNumber } from '../services/invoice-number.service.js';
 import { logger } from '../lib/logger.js';
 import { generateInvoicePdf } from '../services/pdf.service.js';
+import { sendInvoiceEmail } from '../services/email.service.js';
+import { requireMinRole } from '../middleware/authenticate.js';
+import { upload } from '../middleware/upload.js';
+import { storeFile } from '../services/storage.service.js';
+import { getTempPoDir } from '../services/po-extract.service.js';
+import path from 'path';
+import fs from 'fs';
+import { Request } from 'express';
 
 const router = Router();
 router.use(authenticate);
@@ -34,12 +42,13 @@ const STATUS_TRANSITIONS: Record<string, string[]> = {
   DRAFT: ['PENDING_APPROVAL', 'READY_TO_SEND', 'SENT'],
   PENDING_APPROVAL: ['READY_TO_SEND', 'DRAFT'],
   READY_TO_SEND: ['SENT'],
-  SENT: ['VIEWED', 'PAID', 'OVERDUE', 'CANCELLED'],
-  VIEWED: ['PAID', 'OVERDUE', 'CANCELLED'],
-  PART_PAID: ['PAID', 'OVERDUE', 'CANCELLED'],
-  OVERDUE: ['PAID', 'CANCELLED'],
+  SENT: ['VIEWED', 'PAID', 'OVERDUE', 'CANCELLED', 'WRITTEN_OFF'],
+  VIEWED: ['PAID', 'OVERDUE', 'CANCELLED', 'WRITTEN_OFF'],
+  PART_PAID: ['PAID', 'OVERDUE', 'CANCELLED', 'WRITTEN_OFF'],
+  OVERDUE: ['PAID', 'CANCELLED', 'WRITTEN_OFF'],
   PAID: [],
   CANCELLED: [],
+  WRITTEN_OFF: [],
 };
 
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -131,8 +140,11 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 });
 
 router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
-  const { status } = req.body;
-  const invoice = await prisma.invoice.findUnique({ where: { id: req.params.id } });
+  const { status, writeOffReason } = req.body;
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: req.params.id },
+    include: { client: { select: { contactEmail: true, name: true } } },
+  });
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
 
   const allowed = STATUS_TRANSITIONS[invoice.status] ?? [];
@@ -141,16 +153,176 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const metadata: Record<string, unknown> = { from: invoice.status, to: status };
+  if (status === 'WRITTEN_OFF' && writeOffReason) metadata.writeOffReason = writeOffReason;
+
   const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const inv = await tx.invoice.update({ where: { id: req.params.id }, data: { status } });
     await tx.invoiceEvent.create({
-      data: { invoiceId: inv.id, eventType: `STATUS_${status}`, actorId: req.user!.userId, metadata: JSON.stringify({ from: invoice.status, to: status }) },
+      data: { invoiceId: inv.id, eventType: `STATUS_${status}`, actorId: req.user!.userId, metadata: JSON.stringify(metadata) },
     });
     return inv;
   });
 
+  if (status === 'SENT' && invoice.client?.contactEmail) {
+    sendInvoiceEmail({
+      to: invoice.client.contactEmail,
+      clientName: invoice.client.name,
+      invoiceNumber: invoice.invoiceNumber,
+      amount: invoice.total,
+      dueDate: invoice.dueDate,
+      invoiceId: invoice.id,
+    }).catch(err => logger.error('Invoice email failed', { err }));
+  }
+
   logger.info('Invoice status updated', { invoiceId: updated.id, from: invoice.status, to: status });
   res.json(updated);
+});
+
+// PUT /:id — edit a DRAFT invoice
+router.put('/:id', validate(createInvoiceSchema), async (req: AuthRequest, res: Response) => {
+  const { issueDate, dueDate, notes, poNumber, items } = req.body;
+  const invoice = await prisma.invoice.findUnique({ where: { id: req.params.id }, include: { client: true } });
+  if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
+  if (invoice.status !== 'DRAFT') { res.status(400).json({ error: 'Only DRAFT invoices can be edited' }); return; }
+
+  const calcedItems = calcLineItems(items, invoice.client.stateCode);
+  const { subtotal, taxTotal, total } = calcTotals(calcedItems);
+
+  const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    await tx.invoiceItem.deleteMany({ where: { invoiceId: req.params.id } });
+    const inv = await tx.invoice.update({
+      where: { id: req.params.id },
+      data: {
+        issueDate: new Date(issueDate),
+        dueDate: new Date(dueDate),
+        notes,
+        poNumber,
+        subtotal,
+        taxTotal,
+        total,
+        items: {
+          create: calcedItems.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }) => ({
+            description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal,
+          })),
+        },
+      },
+      include: { items: true, client: true, project: true, events: { orderBy: { createdAt: 'asc' }, include: { actor: { select: { name: true } } } }, payments: true, purchaseOrders: true },
+    });
+    await tx.invoiceEvent.create({
+      data: { invoiceId: inv.id, eventType: 'EDITED', actorId: req.user!.userId },
+    });
+    return inv;
+  });
+
+  res.json(updated);
+});
+
+// POST /:id/purchase-order — attach PO document
+router.post(
+  '/:id/purchase-order',
+  (req: Request, res: Response, next) => {
+    if (req.body?.tempFileId) { next(); return; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upload.single('file')(req as any, res as any, (err) => {
+      if (err) { res.status(400).json({ error: (err as Error).message }); return; }
+      next();
+    });
+  },
+  async (req: AuthRequest, res: Response) => {
+    const { z: zod } = await import('zod');
+    const poSchema = zod.object({
+      poNumber: zod.string().min(1),
+      poDate: zod.string(),
+      poValue: zod.coerce.number().positive(),
+      tempFileId: zod.string().optional(),
+    });
+    const parsed = poSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() }); return; }
+
+    const invoice = await prisma.invoice.findUnique({ where: { id: req.params.id } });
+    if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
+
+    let documentUrl: string | undefined;
+    if (parsed.data.tempFileId) {
+      const tmpPath = path.join(getTempPoDir(), parsed.data.tempFileId);
+      if (fs.existsSync(tmpPath)) {
+        const ext = path.extname(parsed.data.tempFileId);
+        const permName = parsed.data.tempFileId.replace(ext, `-po${ext}`);
+        const permPath = path.resolve(process.cwd(), 'uploads', permName);
+        fs.renameSync(tmpPath, permPath);
+        documentUrl = `/uploads/${permName}`;
+      }
+    } else if ((req as AuthRequest & { file?: Express.Multer.File }).file) {
+      const stored = await storeFile((req as AuthRequest & { file: Express.Multer.File }).file);
+      documentUrl = stored.url;
+    }
+
+    const po = await prisma.purchaseOrder.create({
+      data: {
+        invoiceId: req.params.id,
+        poNumber: parsed.data.poNumber,
+        poDate: new Date(parsed.data.poDate),
+        poValue: parsed.data.poValue,
+        documentUrl,
+      },
+    });
+    res.status(201).json(po);
+  }
+);
+
+// POST /from-project/:projectId — generate recurring invoice from RETAINER project
+router.post('/from-project/:projectId', requireMinRole('ACCOUNT_MANAGER'), async (req: AuthRequest, res: Response) => {
+  const project = await prisma.project.findUnique({
+    where: { id: req.params.projectId },
+    include: { client: true },
+  });
+  if (!project) { res.status(404).json({ error: 'Project not found' }); return; }
+  if (project.type !== 'RETAINER') { res.status(400).json({ error: 'Only RETAINER projects support recurring invoices' }); return; }
+
+  const lastInvoice = await prisma.invoice.findFirst({
+    where: { projectId: project.id },
+    orderBy: { createdAt: 'desc' },
+    include: { items: true },
+  });
+
+  const billingDays = project.client.billingTerms === 'NET_15' ? 15 : project.client.billingTerms === 'NET_45' ? 45 : project.client.billingTerms === 'NET_60' ? 60 : 30;
+  const issueDate = new Date();
+  const dueDate = new Date(issueDate.getTime() + billingDays * 86400000);
+  const invoiceNumber = await generateInvoiceNumber();
+
+  const items = lastInvoice?.items.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }) => ({
+    description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal,
+  })) ?? [{ description: `Retainer — ${project.name}`, hsnSac: null, quantity: 1, unitRate: 0, taxRate: 18, taxType: 'CGST_SGST', lineTotal: 0 }];
+
+  const subtotal = items.reduce((s, i) => s + i.quantity * i.unitRate, 0);
+  const taxTotal = items.reduce((s, i) => s + i.quantity * i.unitRate * i.taxRate / 100, 0);
+  const total = subtotal + taxTotal;
+
+  const invoice = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const inv = await tx.invoice.create({
+      data: {
+        invoiceNumber,
+        clientId: project.clientId,
+        projectId: project.id,
+        issueDate,
+        dueDate,
+        subtotal,
+        taxTotal,
+        total,
+        notes: `Monthly retainer — ${issueDate.toLocaleString('en-IN', { month: 'long', year: 'numeric' })}`,
+        createdById: req.user!.userId,
+        items: { create: items },
+      },
+      include: { items: true, client: { select: { name: true } } },
+    });
+    await tx.invoiceEvent.create({
+      data: { invoiceId: inv.id, eventType: 'CREATED', actorId: req.user!.userId, metadata: JSON.stringify({ source: 'RECURRING', projectId: project.id }) },
+    });
+    return inv;
+  });
+
+  res.status(201).json(invoice);
 });
 
 router.post('/bulk-remind', async (req: AuthRequest, res: Response) => {

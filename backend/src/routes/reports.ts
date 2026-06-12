@@ -59,9 +59,14 @@ router.get('/ar-aging', async (req: AuthRequest, res: Response) => {
 });
 
 router.get('/revenue', async (req: AuthRequest, res: Response) => {
-  const { months = '12' } = req.query as Record<string, string>;
-  const from = new Date();
-  from.setMonth(from.getMonth() - parseInt(months));
+  const { months = '6', fyStart } = req.query as Record<string, string>;
+  let from: Date;
+  if (fyStart) {
+    from = new Date(fyStart);
+  } else {
+    from = new Date();
+    from.setMonth(from.getMonth() - parseInt(months));
+  }
   const scope = await buildScope(req);
 
   const [invoices, payments] = await Promise.all([

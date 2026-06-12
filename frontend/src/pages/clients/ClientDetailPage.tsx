@@ -84,7 +84,7 @@ export const ClientDetailPage = () => {
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-gray-900">{client.name}</h1>
+          <h1 className="text-[28px] font-semibold text-on-surface">{client.name}</h1>
           {client.gstin && <p className="text-sm text-gray-400 font-mono mt-0.5">{client.gstin}</p>}
         </div>
       </div>

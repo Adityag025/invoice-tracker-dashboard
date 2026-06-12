@@ -10,6 +10,8 @@ router.use(authenticate);
 
 const paymentSchema = z.object({
   amount: z.number().positive(),
+  tdsAmount: z.number().min(0).optional().default(0),
+  tdsCertNumber: z.string().optional(),
   paymentDate: z.string().datetime(),
   method: z.enum(['NEFT', 'RTGS', 'UPI', 'CHEQUE', 'CASH']),
   referenceNumber: z.string().optional(),
@@ -25,13 +27,13 @@ router.post('/', validate(paymentSchema), async (req: AuthRequest, res: Response
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
   if (invoice.status === 'CANCELLED') { res.status(400).json({ error: 'Cannot record payment on cancelled invoice' }); return; }
 
-  const { amount, paymentDate, method, referenceNumber, notes } = req.body;
-  const totalPaid = invoice.payments.reduce((s: number, p: Payment) => s + p.amount, 0) + amount;
+  const { amount, tdsAmount = 0, tdsCertNumber, paymentDate, method, referenceNumber, notes } = req.body;
+  const totalPaid = invoice.payments.reduce((s: number, p: Payment) => s + p.amount + (p.tdsAmount ?? 0), 0) + amount + (tdsAmount ?? 0);
   const newStatus = totalPaid >= invoice.total ? 'PAID' : 'PART_PAID';
 
   const payment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const p = await tx.payment.create({
-      data: { invoiceId: id, amount, paymentDate: new Date(paymentDate), method, referenceNumber, notes, recordedById: req.user!.userId },
+      data: { invoiceId: id, amount, tdsAmount, tdsCertNumber, paymentDate: new Date(paymentDate), method, referenceNumber, notes, recordedById: req.user!.userId },
     });
     await tx.invoice.update({ where: { id }, data: { status: newStatus } });
     await tx.invoiceEvent.create({

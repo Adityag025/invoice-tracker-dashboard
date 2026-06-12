@@ -31,12 +31,32 @@ interface ArMonthlyRow {
   closingAR: number;
 }
 
+const FY_OPTIONS = [
+  { label: 'FY 2025-26', start: '2025-04-01', end: '2026-03-31' },
+  { label: 'FY 2024-25', start: '2024-04-01', end: '2025-03-31' },
+  { label: 'FY 2023-24', start: '2023-04-01', end: '2024-03-31' },
+  { label: 'Custom', start: '', end: '' },
+];
+
 export const ReportsPage = () => {
   const [tab, setTab] = useState<Tab>('revenue');
+  const [fyLabel, setFyLabel] = useState('Custom');
   const [gstFrom, setGstFrom] = useState('');
   const [gstTo, setGstTo] = useState('');
   const [arMonth, setArMonth] = useState(new Date().toISOString().slice(0, 7));
   const [arGroupBy, setArGroupBy] = useState<'client' | 'pod' | 'ad'>('client');
+
+  const selectedFy = FY_OPTIONS.find(f => f.label === fyLabel) ?? FY_OPTIONS[FY_OPTIONS.length - 1];
+  const revenueFyStart = selectedFy.start || undefined;
+
+  const applyFy = (label: string) => {
+    setFyLabel(label);
+    const fy = FY_OPTIONS.find(f => f.label === label);
+    if (fy && fy.start) {
+      setGstFrom(fy.start);
+      setGstTo(fy.end);
+    }
+  };
 
   const { data: aging, isLoading: loadingAging } = useQuery({
     queryKey: ['reports', 'ar-aging'],
@@ -44,8 +64,8 @@ export const ReportsPage = () => {
   });
 
   const { data: revenue, isLoading: loadingRevenue } = useQuery({
-    queryKey: ['reports', 'revenue'],
-    queryFn: () => api.get('/reports/revenue').then(r => r.data),
+    queryKey: ['reports', 'revenue', revenueFyStart],
+    queryFn: () => api.get('/reports/revenue', { params: { fyStart: revenueFyStart, months: revenueFyStart ? undefined : '6' } }).then(r => r.data),
   });
 
   const { data: gstRows = [], isLoading: loadingGst } = useQuery<GstRow[]>({
@@ -110,18 +130,32 @@ export const ReportsPage = () => {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Financial insights and compliance reports</p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-[28px] font-semibold text-on-surface">Reports</h1>
+          <p className="text-outline text-sm mt-0.5">Financial insights and compliance reports</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-outline font-medium">Financial Year</label>
+          <select
+            className="input text-sm py-1.5"
+            value={fyLabel}
+            onChange={e => applyFy(e.target.value)}
+          >
+            {FY_OPTIONS.map(f => (
+              <option key={f.label} value={f.label}>{f.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Tab bar */}
-      <div className="flex gap-1 bg-gray-100 rounded-xl p-1 w-fit flex-wrap">
+      <div className="flex gap-1 bg-surface-container rounded-xl p-1 w-fit flex-wrap">
         {TABS.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-white text-on-surface shadow-sm' : 'text-outline hover:text-on-surface'}`}
           >
             {t.label}
           </button>
@@ -131,16 +165,16 @@ export const ReportsPage = () => {
       {tab === 'revenue' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card p-5">
-            <h2 className="font-semibold text-gray-900 mb-4">Revenue — Billed vs Collected</h2>
+            <h2 className="text-[18px] font-semibold text-on-surface mb-4">Revenue — Billed vs Collected</h2>
             {loadingRevenue ? <PageLoader /> : (
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={revenueData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e1eafa" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#74777f' }} />
+                  <YAxis tick={{ fontSize: 12, fill: '#74777f' }} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} />
                   <Tooltip formatter={(v: number) => fmt(v)} />
                   <Legend />
-                  <Bar dataKey="Billed" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Billed" fill="#0b61a1" radius={[4, 4, 0, 0]} />
                   <Bar dataKey="Collected" fill="#22c55e" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>

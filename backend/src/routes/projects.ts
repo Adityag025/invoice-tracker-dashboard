@@ -17,9 +17,10 @@ const projectSchema = z.object({
 });
 
 router.get('/', async (req: AuthRequest, res: Response) => {
-  const { clientId, page = '1', limit = '20' } = req.query as Record<string, string>;
+  const { clientId, search, page = '1', limit = '50' } = req.query as Record<string, string>;
   const skip = (parseInt(page) - 1) * parseInt(limit);
-  const where = clientId ? { clientId } : {};
+  const where: Record<string, unknown> = clientId ? { clientId } : {};
+  if (search) where.name = { contains: search };
   const [projects, total] = await Promise.all([
     prisma.project.findMany({
       where,
@@ -44,7 +45,13 @@ router.post('/', validate(projectSchema), async (req: AuthRequest, res: Response
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   const project = await prisma.project.findUnique({
     where: { id: req.params.id },
-    include: { client: true, _count: { select: { invoices: true } } },
+    include: {
+      client: true,
+      invoices: {
+        orderBy: { issueDate: 'desc' },
+        select: { id: true, invoiceNumber: true, status: true, issueDate: true, dueDate: true, total: true },
+      },
+    },
   });
   if (!project) { res.status(404).json({ error: 'Project not found' }); return; }
   res.json(project);

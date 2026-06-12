@@ -268,7 +268,7 @@ export const TeamPage = () => {
     <div className="max-w-4xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Team</h1>
+          <h1 className="text-[28px] font-semibold text-on-surface">Team</h1>
           <p className="text-sm text-gray-500 mt-0.5">{members.length} member{members.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex gap-2">
@@ -413,8 +413,7 @@ export const TeamPage = () => {
           </table>
         )}
       </div>
-
-      </div>}
+      }
 
       {/* Role legend */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

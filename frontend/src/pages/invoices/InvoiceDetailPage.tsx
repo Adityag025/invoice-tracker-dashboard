@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format, isPast } from 'date-fns';
+import { useFieldArray, useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import {
   ArrowLeft, Download, Send, CheckCircle, XCircle, Paperclip,
   Trash2, ExternalLink, FileText, Image, File, CreditCard,
   Bell, BellOff, ReceiptText, Calendar, Building2, Hash,
   Clock, ChevronRight, ShieldCheck, ShieldX, Link2, Copy, Check,
+  Pencil, X, Plus, Save, AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -14,6 +18,7 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { PageLoader } from '../../components/ui/LoadingSpinner';
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner';
 import { FileUpload } from '../../components/ui/FileUpload';
+import { PdfViewer } from '../../components/ui/PdfViewer';
 import { RecordPaymentModal } from '../../components/ui/RecordPaymentModal';
 import { RaiseCreditNoteModal } from '../../components/ui/RaiseCreditNoteModal';
 import { RejectModal } from '../../components/ui/RejectModal';
@@ -24,11 +29,21 @@ import api from '../../lib/api';
 interface Payment {
   id: string;
   amount: number;
+  tdsAmount?: number;
+  tdsCertNumber?: string;
   paymentDate: string;
   method: string;
   referenceNumber?: string;
   notes?: string;
   recordedBy?: { name: string };
+}
+
+interface PurchaseOrder {
+  id: string;
+  poNumber: string;
+  poDate: string;
+  poValue: number;
+  documentUrl?: string;
 }
 
 interface ReminderLog {
@@ -72,6 +87,7 @@ const STATUS_COLORS: Record<string, { bg: string; border: string; dot: string }>
   PAID:             { bg: 'bg-green-50',   border: 'border-green-200',  dot: 'bg-green-500' },
   OVERDUE:          { bg: 'bg-red-50',     border: 'border-red-200',    dot: 'bg-red-500' },
   CANCELLED:        { bg: 'bg-gray-50',    border: 'border-gray-200',   dot: 'bg-gray-400' },
+  WRITTEN_OFF:      { bg: 'bg-gray-50',    border: 'border-gray-200',   dot: 'bg-gray-400' },
 };
 
 const EVENT_LABELS: Record<string, string> = {
@@ -87,7 +103,178 @@ const EVENT_LABELS: Record<string, string> = {
   APPROVED: 'Invoice approved',
   REJECTED: 'Returned to draft',
   PAYMENT_LINK_CREATED: 'Payment link generated',
+  EDITED: 'Invoice edited',
+  STATUS_WRITTEN_OFF: 'Written off',
 };
+
+const GST_RATES = [0, 5, 12, 18, 28];
+
+const lineItemSchema = z.object({
+  description: z.string().min(1, 'Required'),
+  hsnSac: z.string().optional(),
+  quantity: z.coerce.number().positive('Must be > 0'),
+  unitRate: z.coerce.number().positive('Must be > 0'),
+  taxRate: z.coerce.number().min(0).max(100),
+});
+
+const editSchema = z.object({
+  issueDate: z.string().min(1, 'Required'),
+  dueDate: z.string().min(1, 'Required'),
+  poNumber: z.string().optional(),
+  notes: z.string().optional(),
+  items: z.array(lineItemSchema).min(1, 'At least one item'),
+});
+
+type EditForm = z.infer<typeof editSchema>;
+
+// ── Write-off modal ──────────────────────────────────────────────
+function WriteOffModal({ invoiceNumber, isSubmitting, onClose, onConfirm }: {
+  invoiceNumber: string;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center">
+            <AlertTriangle className="w-5 h-5 text-gray-500" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-900">Write Off Invoice</h3>
+            <p className="text-xs text-gray-400">{invoiceNumber}</p>
+          </div>
+        </div>
+        <p className="text-sm text-gray-600 mb-4">
+          This will mark the invoice as written off (bad debt). It won't be cancelled — payments already recorded remain.
+        </p>
+        <div className="mb-4">
+          <label className="label">Reason *</label>
+          <textarea
+            className="input resize-none"
+            rows={3}
+            placeholder="e.g. Client became insolvent, approved by AD"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+          />
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="btn-secondary flex-1">Cancel</button>
+          <button
+            onClick={() => onConfirm(reason)}
+            disabled={isSubmitting || !reason.trim()}
+            className="flex-1 px-4 py-2 rounded-xl bg-gray-700 hover:bg-gray-800 text-white text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {isSubmitting ? 'Saving…' : 'Write Off'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PO section ───────────────────────────────────────────────────
+function PurchaseOrders({ invoiceId }: { invoiceId: string }) {
+  const qc = useQueryClient();
+  const [showForm, setShowForm] = useState(false);
+  const [poDate, setPoDate] = useState('');
+  const [poNumber, setPoNumber] = useState('');
+  const [poValue, setPoValue] = useState('');
+  const [uploading, setUploading] = useState(false);
+
+  const { data: pos = [] } = useQuery<PurchaseOrder[]>({
+    queryKey: ['purchase-orders', 'invoice', invoiceId],
+    queryFn: () => api.get(`/invoices/${invoiceId}`).then(r => r.data.purchaseOrders ?? []),
+    enabled: !!invoiceId,
+  });
+
+  const attachPo = async (file?: File) => {
+    if (!poNumber || !poDate || !poValue) { toast.error('Fill in PO details first'); return; }
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('poNumber', poNumber);
+      form.append('poDate', new Date(poDate).toISOString());
+      form.append('poValue', poValue);
+      if (file) form.append('file', file);
+      await api.post(`/invoices/${invoiceId}/purchase-order`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      qc.invalidateQueries({ queryKey: ['purchase-orders', 'invoice', invoiceId] });
+      qc.invalidateQueries({ queryKey: ['invoices', invoiceId] });
+      toast.success('PO attached');
+      setShowForm(false); setPoNumber(''); setPoDate(''); setPoValue('');
+    } catch (e: unknown) {
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to attach PO');
+    } finally { setUploading(false); }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Hash className="w-4 h-4 text-gray-400" />
+          <h2 className="font-semibold text-gray-900">Purchase Orders</h2>
+          {pos.length > 0 && (
+            <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">{pos.length}</span>
+          )}
+        </div>
+        <button onClick={() => setShowForm(v => !v)} className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors">
+          {showForm ? 'Cancel' : '+ Attach PO'}
+        </button>
+      </div>
+      <div className="p-5 space-y-3">
+        {pos.map(po => (
+          <div key={po.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-900 font-mono">{po.poNumber}</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {format(new Date(po.poDate), 'dd MMM yyyy')} · {fmt(po.poValue)}
+              </p>
+            </div>
+            {po.documentUrl && (
+              <a href={po.documentUrl} target="_blank" rel="noopener noreferrer"
+                className="w-7 h-7 rounded-lg hover:bg-blue-50 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-colors">
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+        ))}
+        {showForm && (
+          <div className="border border-dashed border-gray-200 rounded-xl p-4 space-y-3">
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="label">PO Number *</label>
+                <input className="input text-xs" placeholder="PO-001" value={poNumber} onChange={e => setPoNumber(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">PO Date *</label>
+                <input type="date" className="input text-xs" value={poDate} onChange={e => setPoDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">PO Value *</label>
+                <input type="number" className="input text-xs" placeholder="0" value={poValue} onChange={e => setPoValue(e.target.value)} />
+              </div>
+            </div>
+            <FileUpload onUpload={attachPo} isUploading={uploading} label="Attach PO document (optional)" />
+            {!uploading && (
+              <button
+                onClick={() => attachPo()}
+                disabled={!poNumber || !poDate || !poValue}
+                className="btn-secondary text-xs w-full disabled:opacity-50"
+              >
+                Save PO (without document)
+              </button>
+            )}
+          </div>
+        )}
+        {pos.length === 0 && !showForm && (
+          <p className="text-sm text-gray-400 text-center py-4">No purchase orders attached</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export const InvoiceDetailPage = () => {
   const { id } = useParams<{ id: string }>();
@@ -100,11 +287,56 @@ export const InvoiceDetailPage = () => {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showCreditNoteModal, setShowCreditNoteModal] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
+  const [showWriteOffModal, setShowWriteOffModal] = useState(false);
   const [sendingReminder, setSendingReminder] = useState(false);
   const [generatingLink, setGeneratingLink] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [pdfVersion, setPdfVersion] = useState(0);
   const { user } = useAuthStore();
   const isAdmin = hasMinRole(user?.role, 'ACCOUNT_DIRECTOR');
+
+  // Edit form
+  const { register, control, handleSubmit, reset, watch, formState: { errors, isSubmitting: isEditSubmitting } } = useForm<EditForm>({
+    resolver: zodResolver(editSchema),
+  });
+  const { fields, append, remove } = useFieldArray({ control, name: 'items' });
+  const watchedItems = watch('items') ?? [];
+  const editSubtotal = watchedItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unitRate) || 0), 0);
+  const editTax = watchedItems.reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.unitRate) || 0) * (Number(i.taxRate) || 0) / 100, 0);
+
+  const enterEditMode = () => {
+    if (!invoice) return;
+    reset({
+      issueDate: invoice.issueDate.slice(0, 10),
+      dueDate: invoice.dueDate.slice(0, 10),
+      poNumber: invoice.poNumber ?? '',
+      notes: invoice.notes ?? '',
+      items: invoice.items?.map((i: { description: string; hsnSac?: string; quantity: number; unitRate: number; taxRate: number }) => ({
+        description: i.description,
+        hsnSac: i.hsnSac ?? '',
+        quantity: i.quantity,
+        unitRate: i.unitRate,
+        taxRate: i.taxRate,
+      })) ?? [],
+    });
+    setEditMode(true);
+  };
+
+  const saveEdits = async (data: EditForm) => {
+    try {
+      await api.put(`/invoices/${id}`, {
+        ...data,
+        issueDate: new Date(data.issueDate).toISOString(),
+        dueDate: new Date(data.dueDate).toISOString(),
+      });
+      qc.invalidateQueries({ queryKey: ['invoices', id] });
+      setPdfVersion(v => v + 1);
+      toast.success('Invoice updated');
+    } catch (e: unknown) {
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to save');
+    }
+  };
 
   const { data: attachments = [] } = useQuery<Attachment[]>({
     queryKey: ['attachments', id],
@@ -149,6 +381,18 @@ export const InvoiceDetailPage = () => {
     },
     onError: (e: unknown) => {
       toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to raise credit note');
+    },
+  });
+
+  const writeOffInvoice = useMutation({
+    mutationFn: (reason: string) => api.patch(`/invoices/${id}/status`, { status: 'WRITTEN_OFF', writeOffReason: reason }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoices', id] });
+      setShowWriteOffModal(false);
+      toast.success('Invoice written off');
+    },
+    onError: (e: unknown) => {
+      toast.error((e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed');
     },
   });
 
@@ -246,22 +490,151 @@ export const InvoiceDetailPage = () => {
   if (isLoading) return <PageLoader />;
   if (!invoice) return <div className="text-center py-12 text-gray-400">Invoice not found</div>;
 
-  const paidSoFar = payments.reduce((s, p) => s + p.amount, 0);
+  const paidSoFar = payments.reduce((s, p) => s + p.amount + (p.tdsAmount ?? 0), 0);
   const balance = Math.max(0, invoice.total - paidSoFar);
   const paidPct = Math.min(100, invoice.total > 0 ? Math.round((paidSoFar / invoice.total) * 100) : 0);
-  const isOverdue = invoice.status !== 'PAID' && invoice.status !== 'CANCELLED' && isPast(new Date(invoice.dueDate));
+  const isOverdue = invoice.status !== 'PAID' && invoice.status !== 'CANCELLED' && invoice.status !== 'WRITTEN_OFF' && isPast(new Date(invoice.dueDate));
   const statusColors = STATUS_COLORS[invoice.status] ?? STATUS_COLORS['DRAFT'];
+  const hasTds = payments.some(p => (p.tdsAmount ?? 0) > 0);
 
   const canRecord = ['SENT', 'VIEWED', 'PART_PAID', 'OVERDUE'].includes(invoice.status);
   const canRemind = canRecord;
   const canMarkPaid = ['SENT', 'VIEWED', 'PART_PAID'].includes(invoice.status);
-  const canCancel = !['PAID', 'CANCELLED'].includes(invoice.status);
-  const canCreditNote = invoice.status !== 'CANCELLED';
+  const canCancel = !['PAID', 'CANCELLED', 'WRITTEN_OFF'].includes(invoice.status);
+  const canCreditNote = !['CANCELLED', 'WRITTEN_OFF'].includes(invoice.status);
   const canSubmitApproval = invoice.status === 'DRAFT';
   const canApproveReject = invoice.status === 'PENDING_APPROVAL' && isAdmin;
   const canSend = invoice.status === 'READY_TO_SEND';
-  const canPaymentLink = !['PAID', 'CANCELLED', 'DRAFT'].includes(invoice.status) && balance > 0;
+  const canPaymentLink = !['PAID', 'CANCELLED', 'DRAFT', 'WRITTEN_OFF'].includes(invoice.status) && balance > 0;
+  const canEdit = invoice.status === 'DRAFT';
+  const canWriteOff = ['SENT', 'VIEWED', 'PART_PAID', 'OVERDUE'].includes(invoice.status);
 
+  // ── Split-pane edit mode ──────────────────────────────────────
+  if (editMode) {
+    return (
+      <div className="fixed inset-0 top-14 flex flex-col bg-white z-10">
+        {/* Edit mode top bar */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white shrink-0">
+          <div className="flex items-center gap-3">
+            <span className="font-mono font-semibold text-gray-900">{invoice.invoiceNumber}</span>
+            <StatusBadge status={invoice.status} />
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setEditMode(false)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" /> Close Edit
+            </button>
+            <button
+              onClick={handleSubmit(saveEdits)}
+              disabled={isEditSubmitting}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              {isEditSubmitting ? <LoadingSpinner size="sm" /> : <Save className="w-3.5 h-3.5" />}
+              {isEditSubmitting ? 'Saving…' : 'Save & Refresh PDF'}
+            </button>
+          </div>
+        </div>
+
+        {/* Split pane */}
+        <div className="flex-1 flex min-h-0 flex-col md:flex-row">
+          {/* Left: PDF preview */}
+          <div className="flex-1 md:w-1/2 min-h-[300px] md:min-h-0 border-b md:border-b-0 md:border-r border-gray-200 bg-gray-50">
+            <PdfViewer
+              url={`/invoices/${id}/pdf?v=${pdfVersion}`}
+              className="w-full h-full"
+            />
+          </div>
+
+          {/* Right: Edit form */}
+          <div className="flex-1 md:w-1/2 overflow-y-auto p-5 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Issue Date *</label>
+                <input {...register('issueDate')} type="date" className="input" />
+                {errors.issueDate && <p className="text-red-500 text-xs mt-1">{errors.issueDate.message}</p>}
+              </div>
+              <div>
+                <label className="label">Due Date *</label>
+                <input {...register('dueDate')} type="date" className="input" />
+                {errors.dueDate && <p className="text-red-500 text-xs mt-1">{errors.dueDate.message}</p>}
+              </div>
+              <div>
+                <label className="label">PO Number</label>
+                <input {...register('poNumber')} className="input" placeholder="Client PO ref" />
+              </div>
+              <div>
+                <label className="label">Notes</label>
+                <input {...register('notes')} className="input" placeholder="Optional notes" />
+              </div>
+            </div>
+
+            <div className="card overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                <span className="font-medium text-gray-700 text-sm">Line Items</span>
+                <button
+                  type="button"
+                  onClick={() => append({ description: '', quantity: 1, unitRate: 0, taxRate: 18 })}
+                  className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+                >
+                  <Plus className="w-3 h-3" /> Add Line
+                </button>
+              </div>
+              <div className="p-3 space-y-2">
+                {fields.map((field, idx) => (
+                  <div key={field.id} className="grid grid-cols-12 gap-1.5 items-end">
+                    <div className="col-span-4">
+                      {idx === 0 && <label className="label text-xs">Description</label>}
+                      <input {...register(`items.${idx}.description`)} className="input text-xs" placeholder="Service" />
+                    </div>
+                    <div className="col-span-2">
+                      {idx === 0 && <label className="label text-xs">HSN/SAC</label>}
+                      <input {...register(`items.${idx}.hsnSac`)} className="input text-xs font-mono" placeholder="998313" />
+                    </div>
+                    <div className="col-span-1">
+                      {idx === 0 && <label className="label text-xs">Qty</label>}
+                      <input {...register(`items.${idx}.quantity`)} type="number" step="0.01" className="input text-xs text-right" />
+                    </div>
+                    <div className="col-span-2">
+                      {idx === 0 && <label className="label text-xs">Rate (₹)</label>}
+                      <input {...register(`items.${idx}.unitRate`)} type="number" step="0.01" className="input text-xs text-right" />
+                    </div>
+                    <div className="col-span-2">
+                      {idx === 0 && <label className="label text-xs">GST %</label>}
+                      <Controller
+                        control={control}
+                        name={`items.${idx}.taxRate`}
+                        render={({ field }) => (
+                          <select {...field} className="input text-xs">
+                            {GST_RATES.map(r => <option key={r} value={r}>{r}%</option>)}
+                          </select>
+                        )}
+                      />
+                    </div>
+                    <div className="col-span-1 flex items-end justify-end">
+                      {fields.length > 1 && (
+                        <button type="button" onClick={() => remove(idx)} className="p-1.5 text-gray-400 hover:text-red-500 transition-colors mb-0.5">
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="border-t border-gray-100 px-4 py-2.5 bg-gray-50 flex justify-end gap-6 text-xs">
+                <span className="text-gray-500">Subtotal: <strong className="text-gray-900">{fmt(editSubtotal)}</strong></span>
+                <span className="text-gray-500">Tax: <strong className="text-gray-900">{fmt(editTax)}</strong></span>
+                <span className="font-bold text-gray-900">Total: {fmt(editSubtotal + editTax)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Normal view ───────────────────────────────────────────────
   return (
     <div className="max-w-6xl">
       {/* ── Top nav bar ── */}
@@ -275,6 +648,14 @@ export const InvoiceDetailPage = () => {
         </button>
         <ChevronRight className="w-3.5 h-3.5 text-gray-300" />
         <span className="text-sm font-medium text-gray-900">{invoice.invoiceNumber}</span>
+        {canEdit && (
+          <button
+            onClick={enterEditMode}
+            className="ml-2 flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition-colors"
+          >
+            <Pencil className="w-3 h-3" /> Edit & Preview
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-[1fr_320px] gap-6 items-start">
@@ -286,7 +667,7 @@ export const InvoiceDetailPage = () => {
             <div className="flex items-start justify-between">
               <div>
                 <div className="flex items-center gap-3 mb-2">
-                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{invoice.invoiceNumber}</h1>
+                  <h1 className="text-[28px] font-semibold text-on-surface tracking-tight">{invoice.invoiceNumber}</h1>
                   <StatusBadge status={invoice.status} />
                   {isOverdue && invoice.status !== 'OVERDUE' && (
                     <span className="text-xs font-semibold text-red-600 bg-red-100 px-2 py-0.5 rounded-full">Overdue</span>
@@ -410,8 +791,9 @@ export const InvoiceDetailPage = () => {
                       <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
                       <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Method</th>
                       <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Reference</th>
-                      <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Recorded By</th>
-                      <th className="text-right px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</th>
+                      <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">By</th>
+                      <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</th>
+                      {hasTds && <th className="text-right px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">TDS</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
@@ -422,19 +804,27 @@ export const InvoiceDetailPage = () => {
                           <span className="text-xs font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md">{p.method}</span>
                         </td>
                         <td className="px-3 py-3 text-gray-500 font-mono text-xs">{p.referenceNumber ?? '—'}</td>
-                        <td className="px-3 py-3 text-gray-500">{p.recordedBy?.name ?? '—'}</td>
-                        <td className="px-5 py-3 text-right font-semibold text-green-600">{fmt(p.amount)}</td>
+                        <td className="px-3 py-3 text-gray-500 text-xs">{p.recordedBy?.name ?? '—'}</td>
+                        <td className="px-3 py-3 text-right font-semibold text-green-600">{fmt(p.amount)}</td>
+                        {hasTds && (
+                          <td className="px-5 py-3 text-right text-xs text-gray-500">
+                            {(p.tdsAmount ?? 0) > 0 ? (
+                              <span title={p.tdsCertNumber ?? undefined}>{fmt(p.tdsAmount!)}</span>
+                            ) : '—'}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
                   <tfoot className="border-t-2 border-gray-100 bg-gray-50/60">
                     <tr>
-                      <td colSpan={4} className="px-5 py-2.5 text-right text-sm font-medium text-gray-700">Total Paid</td>
-                      <td className="px-5 py-2.5 text-right font-bold text-green-600">{fmt(paidSoFar)}</td>
+                      <td colSpan={hasTds ? 4 : 3} className="px-5 py-2.5 text-right text-sm font-medium text-gray-700">Total Collected</td>
+                      <td className="px-3 py-2.5 text-right font-bold text-green-600">{fmt(payments.reduce((s, p) => s + p.amount, 0))}</td>
+                      {hasTds && <td className="px-5 py-2.5 text-right font-bold text-gray-500">{fmt(payments.reduce((s, p) => s + (p.tdsAmount ?? 0), 0))}</td>}
                     </tr>
                     {balance > 0 && (
                       <tr>
-                        <td colSpan={4} className="px-5 py-2 text-right text-sm font-medium text-gray-700">Balance Due</td>
+                        <td colSpan={hasTds ? 5 : 4} className="px-5 py-2 text-right text-sm font-medium text-gray-700">Balance Due</td>
                         <td className="px-5 py-2 text-right font-bold text-orange-500">{fmt(balance)}</td>
                       </tr>
                     )}
@@ -453,6 +843,9 @@ export const InvoiceDetailPage = () => {
               </div>
             )}
           </div>
+
+          {/* ── Purchase Orders ── */}
+          <PurchaseOrders invoiceId={id!} />
 
           {/* ── Attachments ── */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -535,7 +928,13 @@ export const InvoiceDetailPage = () => {
             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Actions</h3>
             <div className="space-y-2">
 
-              {/* Primary CTA — context-sensitive */}
+              {canEdit && (
+                <button onClick={enterEditMode}
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-blue-200 hover:bg-blue-50 text-blue-700 text-sm font-medium transition-colors">
+                  <Pencil className="w-4 h-4" /> Edit & Preview PDF
+                </button>
+              )}
+
               {canSubmitApproval && (
                 <button onClick={() => submitForApproval.mutate()} disabled={submitForApproval.isPending}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors disabled:opacity-50">
@@ -556,7 +955,6 @@ export const InvoiceDetailPage = () => {
                 </button>
               )}
 
-              {/* Admin approval actions */}
               {canApproveReject && (
                 <div className="flex gap-2">
                   <button onClick={() => approveInvoice.mutate()} disabled={approveInvoice.isPending}
@@ -571,7 +969,6 @@ export const InvoiceDetailPage = () => {
                 </div>
               )}
 
-              {/* Payment link */}
               {canPaymentLink && (
                 <button onClick={generatePaymentLink} disabled={generatingLink || !!invoice.razorpayLinkUrl}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-indigo-200 hover:bg-indigo-50 text-indigo-700 text-sm font-medium transition-colors disabled:opacity-50">
@@ -599,12 +996,18 @@ export const InvoiceDetailPage = () => {
                 {downloadingPdf ? 'Generating PDF…' : 'Download PDF'}
               </button>
 
-              {(canCreditNote || canCancel) && (
+              {(canCreditNote || canCancel || canWriteOff) && (
                 <div className="border-t border-gray-100 pt-2 mt-1 space-y-2">
                   {canCreditNote && (
                     <button onClick={() => setShowCreditNoteModal(true)}
                       className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-orange-200 hover:bg-orange-50 text-orange-600 text-sm font-medium transition-colors">
                       <ReceiptText className="w-4 h-4" /> Raise Credit Note
+                    </button>
+                  )}
+                  {canWriteOff && (
+                    <button onClick={() => setShowWriteOffModal(true)}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 text-gray-600 text-sm font-medium transition-colors">
+                      <AlertTriangle className="w-4 h-4" /> Write Off
                     </button>
                   )}
                   {canCancel && (
@@ -708,6 +1111,14 @@ export const InvoiceDetailPage = () => {
           isSubmitting={rejectInvoice.isPending}
           onClose={() => setShowRejectModal(false)}
           onConfirm={async (reason) => { await rejectInvoice.mutateAsync(reason); }}
+        />
+      )}
+      {showWriteOffModal && (
+        <WriteOffModal
+          invoiceNumber={invoice.invoiceNumber}
+          isSubmitting={writeOffInvoice.isPending}
+          onClose={() => setShowWriteOffModal(false)}
+          onConfirm={(reason) => writeOffInvoice.mutate(reason)}
         />
       )}
     </div>

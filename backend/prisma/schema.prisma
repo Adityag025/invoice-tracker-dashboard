@@ -218,6 +218,8 @@ model Payment {
   id              String   @id @default(cuid())
   invoiceId       String   @map("invoice_id")
   amount          Float
+  tdsAmount       Float    @default(0) @map("tds_amount")
+  tdsCertNumber   String?  @map("tds_cert_number")
   paymentDate     DateTime @map("payment_date")
   method          String
   referenceNumber String?  @map("reference_number")
@@ -301,4 +303,12 @@ model InvoiceAttachment {
 
   @@index([invoiceId])
   @@map("invoice_attachments")
+}
+
+model SystemSettings {
+  id        String   @id @default("singleton")
+  data      String   @default("{}")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_settings")
 }

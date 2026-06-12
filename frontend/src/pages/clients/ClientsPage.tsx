@@ -68,8 +68,8 @@ export const ClientsPage = () => {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{data?.total ?? 0} clients</p>
+          <h1 className="text-[28px] font-semibold text-on-surface">Clients</h1>
+          <p className="text-outline text-sm mt-0.5">{data?.total ?? 0} clients</p>
         </div>
         <button className="btn-primary" onClick={() => setShowForm(true)}>
           <Plus className="w-4 h-4" /> New Client
