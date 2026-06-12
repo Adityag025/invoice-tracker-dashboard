@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+}
+
+enum ProjectType {
+  RETAINER
+  ONE_OFF
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING_APPROVAL
+  READY_TO_SEND
+  SENT
+  VIEWED
+  PART_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum EstimateStatus {
+  DRAFT
+  SENT
+  APPROVED
+  EXPIRED
+  CONVERTED
+}
+
+enum TaxType {
+  CGST_SGST
+  IGST
+}
+
+enum PaymentMethod {
+  NEFT
+  RTGS
+  UPI
+  CHEQUE
+  CASH
+}
+
+enum CreditNoteType {
+  FULL
+  PARTIAL
+}
+
+enum CreditNoteStatus {
+  DRAFT
+  ISSUED
+  SETTLED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(MANAGER)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  invoices      Invoice[]      @relation("InvoiceCreatedBy")
+  estimates     Estimate[]     @relation("EstimateCreatedBy")
+  payments      Payment[]      @relation("PaymentRecordedBy")
+  invoiceEvents InvoiceEvent[]
+  creditNotes   CreditNote[]
+
+  @@map("users")
+}
+
+model Client {
+  id           String  @id @default(cuid())
+  name         String
+  gstin        String?
+  stateCode    String  @map("state_code")
+  billingTerms String  @default("NET_30") @map("billing_terms")
+  creditLimit  Float?  @map("credit_limit")
+  contactName  String  @map("contact_name")
+  contactEmail String  @map("contact_email")
+  contactPhone String? @map("contact_phone")
+  address      String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  projects      Project[]
+  invoices      Invoice[]
+  estimates     Estimate[]
+  clientCredits ClientCredit[]
+
+  @@map("clients")
+}
+
+model Project {
+  id        String      @id @default(cuid())
+  clientId  String      @map("client_id")
+  name      String
+  type      ProjectType @default(ONE_OFF)
+  budget    Float?
+  startDate DateTime?   @map("start_date")
+  endDate   DateTime?   @map("end_date")
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  client    Client     @relation(fields: [clientId], references: [id])
+  invoices  Invoice[]
+  estimates Estimate[]
+
+  @@map("projects")
+}
+
+model Invoice {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique @map("invoice_number")
+  clientId      String        @map("client_id")
+  projectId     String?       @map("project_id")
+  status        InvoiceStatus @default(DRAFT)
+  issueDate     DateTime      @map("issue_date")
+  dueDate       DateTime      @map("due_date")
+  subtotal      Float
+  taxTotal      Float         @map("tax_total")
+  total         Float
+  notes         String?
+  poNumber      String?       @map("po_number")
+  createdById   String        @map("created_by")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  client        Client         @relation(fields: [clientId], references: [id])
+  project       Project?       @relation(fields: [projectId], references: [id])
+  createdBy     User           @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  items         InvoiceItem[]
+  events        InvoiceEvent[]
+  payments      Payment[]
+  creditNotes   CreditNote[]   @relation("OriginalInvoice")
+  replacedBy    CreditNote?    @relation("ReplacementInvoice")
+  purchaseOrders PurchaseOrder[]
+  reminderLogs  ReminderLog[]
+
+  @@index([clientId, status])
+  @@index([dueDate, status])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String   @id @default(cuid())
+  invoiceId   String   @map("invoice_id")
+  description String
+  hsnSac      String?  @map("hsn_sac")
+  quantity    Float
+  unitRate    Float    @map("unit_rate")
+  taxRate     Float    @map("tax_rate")
+  taxType     TaxType  @map("tax_type")
+  lineTotal   Float    @map("line_total")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+model InvoiceEvent {
+  id        String   @id @default(cuid())
+  invoiceId String   @map("invoice_id")
+  eventType String   @map("event_type")
+  actorId   String?  @map("actor_id")
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  actor   User?   @relation(fields: [actorId], references: [id])
+
+  @@index([invoiceId, createdAt])
+  @@map("invoice_events")
+}
+
+model Estimate {
+  id             String         @id @default(cuid())
+  estimateNumber String         @unique @map("estimate_number")
+  clientId       String         @map("client_id")
+  projectId      String?        @map("project_id")
+  status         EstimateStatus @default(DRAFT)
+  revisionOf     String?        @map("revision_of")
+  validUntil     DateTime?      @map("valid_until")
+  subtotal       Float
+  taxTotal       Float          @map("tax_total")
+  total          Float
+  notes          String?
+  createdById    String         @map("created_by")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  client         Client          @relation(fields: [clientId], references: [id])
+  project        Project?        @relation(fields: [projectId], references: [id])
+  createdBy      User            @relation("EstimateCreatedBy", fields: [createdById], references: [id])
+  parentEstimate Estimate?       @relation("EstimateRevisions", fields: [revisionOf], references: [id])
+  revisions      Estimate[]      @relation("EstimateRevisions")
+  items          EstimateItem[]
+  purchaseOrders PurchaseOrder[]
+
+  @@index([clientId, status])
+  @@map("estimates")
+}
+
+model EstimateItem {
+  id          String  @id @default(cuid())
+  estimateId  String  @map("estimate_id")
+  description String
+  hsnSac      String? @map("hsn_sac")
+  quantity    Float
+  unitRate    Float   @map("unit_rate")
+  taxRate     Float   @map("tax_rate")
+  taxType     TaxType @map("tax_type")
+  lineTotal   Float   @map("line_total")
+
+  estimate Estimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  @@map("estimate_items")
+}
+
+model PurchaseOrder {
+  id          String   @id @default(cuid())
+  estimateId  String?  @map("estimate_id")
+  invoiceId   String?  @map("invoice_id")
+  poNumber    String   @map("po_number")
+  poDate      DateTime @map("po_date")
+  poValue     Float    @map("po_value")
+  documentUrl String?  @map("document_url")
+  receivedAt  DateTime @default(now()) @map("received_at")
+
+  estimate Estimate? @relation(fields: [estimateId], references: [id])
+  invoice  Invoice?  @relation(fields: [invoiceId], references: [id])
+
+  @@map("purchase_orders")
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  invoiceId       String        @map("invoice_id")
+  amount          Float
+  paymentDate     DateTime      @map("payment_date")
+  method          PaymentMethod
+  referenceNumber String?       @map("reference_number")
+  notes           String?
+  recordedById    String        @map("recorded_by")
+  createdAt       DateTime      @default(now()) @map("created_at")
+
+  invoice    Invoice @relation(fields: [invoiceId], references: [id])
+  recordedBy User    @relation("PaymentRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+model CreditNote {
+  id                  String           @id @default(cuid())
+  cnNumber            String           @unique @map("cn_number")
+  invoiceId           String           @map("invoice_id")
+  type                CreditNoteType
+  reason              String
+  amount              Float
+  status              CreditNoteStatus @default(DRAFT)
+  refundAmount        Float?           @map("refund_amount")
+  refundDate          DateTime?        @map("refund_date")
+  replacementInvoiceId String?         @unique @map("replacement_invoice_id")
+  issuedById          String           @map("issued_by")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  originalInvoice     Invoice  @relation("OriginalInvoice", fields: [invoiceId], references: [id])
+  replacementInvoice  Invoice? @relation("ReplacementInvoice", fields: [replacementInvoiceId], references: [id])
+  issuedBy            User     @relation(fields: [issuedById], references: [id])
+  clientCredits       ClientCredit[]
+
+  @@map("credit_notes")
+}
+
+model ClientCredit {
+  id             String   @id @default(cuid())
+  clientId       String   @map("client_id")
+  creditNoteId   String   @map("credit_note_id")
+  amount         Float
+  usedAmount     Float    @default(0) @map("used_amount")
+  remainingAmount Float   @map("remaining_amount")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  client     Client     @relation(fields: [clientId], references: [id])
+  creditNote CreditNote @relation(fields: [creditNoteId], references: [id])
+
+  @@map("client_credits")
+}
+
+model ReminderLog {
+  id           String   @id @default(cuid())
+  invoiceId    String   @map("invoice_id")
+  reminderType String   @map("reminder_type")
+  sentAt       DateTime @map("sent_at")
+  emailTo      String   @map("email_to")
+  status       String
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+
+  @@map("reminder_logs")
+}
