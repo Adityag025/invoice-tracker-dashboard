@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, FileText, FileCheck, Users, BarChart3, Settings, LogOut, Receipt } from 'lucide-react';
+import { LayoutDashboard, FileText, FileCheck, Users, BarChart3, LogOut, Receipt, FileX } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { clsx } from 'clsx';
 
@@ -7,6 +7,7 @@ const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/invoices', label: 'Invoices', icon: FileText },
   { to: '/estimates', label: 'Estimates', icon: FileCheck },
+  { to: '/credit-notes', label: 'Credit Notes', icon: FileX },
   { to: '/clients', label: 'Clients', icon: Users },
   { to: '/reports', label: 'Reports', icon: BarChart3 },
 ];

@@ -8,6 +8,8 @@ import { NewInvoicePage } from './pages/invoices/NewInvoicePage';
 import { EstimatesPage } from './pages/estimates/EstimatesPage';
 import { EstimateDetailPage } from './pages/estimates/EstimateDetailPage';
 import { ClientsPage } from './pages/clients/ClientsPage';
+import { ClientDetailPage } from './pages/clients/ClientDetailPage';
+import { CreditNotesPage } from './pages/credit-notes/CreditNotesPage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 
 function App() {
@@ -23,7 +25,9 @@ function App() {
           <Route path="/invoices/:id" element={<InvoiceDetailPage />} />
           <Route path="/estimates" element={<EstimatesPage />} />
           <Route path="/estimates/:id" element={<EstimateDetailPage />} />
+          <Route path="/credit-notes" element={<CreditNotesPage />} />
           <Route path="/clients" element={<ClientsPage />} />
+          <Route path="/clients/:id" element={<ClientDetailPage />} />
           <Route path="/reports" element={<ReportsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

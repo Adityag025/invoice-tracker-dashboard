@@ -159,6 +159,143 @@ async function fetchInvoiceForPdf(invoiceId: string) {
   });
 }
 
+export async function generateClientStatementPdf(clientId: string, from?: Date, to?: Date): Promise<Buffer> {
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client) throw new Error('Client not found');
+
+  const where: Record<string, unknown> = { clientId };
+  if (from || to) {
+    where.issueDate = {
+      ...(from ? { gte: from } : {}),
+      ...(to ? { lte: to } : {}),
+    };
+  }
+
+  const invoices = await prisma.invoice.findMany({
+    where,
+    include: { payments: { orderBy: { paymentDate: 'asc' } } },
+    orderBy: { issueDate: 'asc' },
+  });
+
+  let runningBalance = 0;
+  const rows = invoices.flatMap(inv => {
+    const rows: { date: string; description: string; debit: number; credit: number; balance: number }[] = [];
+    runningBalance += inv.total;
+    rows.push({ date: fmtDate(inv.issueDate), description: `Invoice ${inv.invoiceNumber}`, debit: inv.total, credit: 0, balance: runningBalance });
+    for (const pay of inv.payments) {
+      runningBalance -= pay.amount;
+      rows.push({ date: fmtDate(pay.paymentDate), description: `Payment — ${pay.method}${pay.referenceNumber ? ' / ' + pay.referenceNumber : ''}`, debit: 0, credit: pay.amount, balance: runningBalance });
+    }
+    return rows;
+  });
+
+  const period = from && to
+    ? `${fmtDate(from)} to ${fmtDate(to)}`
+    : from ? `From ${fmtDate(from)}` : to ? `Up to ${fmtDate(to)}` : 'All time';
+
+  const rowHtml = rows.map(r => `
+    <tr>
+      <td>${r.date}</td>
+      <td>${r.description}</td>
+      <td class="right">${r.debit > 0 ? fmt(r.debit) : ''}</td>
+      <td class="right green">${r.credit > 0 ? fmt(r.credit) : ''}</td>
+      <td class="right bold ${r.balance > 0 ? 'red' : 'green'}">${fmt(Math.abs(r.balance))}</td>
+    </tr>`).join('');
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #1a1a2e; background: #fff; padding: 32px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 24px; }
+  .agency-name { font-size: 22px; font-weight: 700; color: #2563eb; }
+  .title { font-size: 20px; font-weight: 300; color: #9ca3af; letter-spacing: 2px; text-transform: uppercase; }
+  .subtitle { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .meta { display: flex; gap: 32px; margin-bottom: 24px; background: #f9fafb; padding: 16px; border-radius: 8px; }
+  .meta-item .label { font-size: 10px; text-transform: uppercase; color: #9ca3af; letter-spacing: 1px; }
+  .meta-item .value { font-weight: 600; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: #2563eb; color: white; }
+  thead th { padding: 10px 8px; text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  thead th.right { text-align: right; }
+  tbody tr { border-bottom: 1px solid #f3f4f6; }
+  tbody tr:nth-child(even) { background: #f9fafb; }
+  tbody td { padding: 9px 8px; }
+  td.right { text-align: right; }
+  td.bold { font-weight: 600; }
+  td.green { color: #16a34a; }
+  td.red { color: #dc2626; }
+  .summary { margin-top: 24px; text-align: right; }
+  .summary-row { display: flex; justify-content: flex-end; gap: 32px; padding: 8px 0; border-top: 1px solid #e5e7eb; }
+  .summary-row.total { font-weight: 700; font-size: 14px; color: #2563eb; border-top: 2px solid #2563eb; }
+  .footer { margin-top: 32px; text-align: center; color: #9ca3af; font-size: 10px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+</style></head>
+<body>
+  <div class="header">
+    <div>
+      <div class="agency-name">${AGENCY_NAME}</div>
+      ${AGENCY_GSTIN ? `<div style="font-size:10px;color:#6b7280;margin-top:4px">GSTIN: ${AGENCY_GSTIN}</div>` : ''}
+    </div>
+    <div style="text-align:right">
+      <div class="title">Account Statement</div>
+      <div class="subtitle">Period: ${period}</div>
+    </div>
+  </div>
+
+  <div class="meta">
+    <div class="meta-item">
+      <div class="label">Client</div>
+      <div class="value">${client.name}</div>
+    </div>
+    ${client.gstin ? `<div class="meta-item"><div class="label">GSTIN</div><div class="value">${client.gstin}</div></div>` : ''}
+    <div class="meta-item">
+      <div class="label">Contact</div>
+      <div class="value">${client.contactName}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Email</div>
+      <div class="value">${client.contactEmail}</div>
+    </div>
+    <div class="meta-item">
+      <div class="label">Closing Balance</div>
+      <div class="value" style="color:${runningBalance > 0 ? '#dc2626' : '#16a34a'}">${fmt(Math.abs(runningBalance))} ${runningBalance > 0 ? 'Due' : 'Advance'}</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Description</th>
+        <th class="right">Debit (₹)</th>
+        <th class="right">Credit (₹)</th>
+        <th class="right">Balance (₹)</th>
+      </tr>
+    </thead>
+    <tbody>${rowHtml || '<tr><td colspan="5" style="text-align:center;padding:32px;color:#9ca3af">No transactions found</td></tr>'}</tbody>
+  </table>
+
+  <div class="footer">${AGENCY_NAME} · Generated ${fmtDate(new Date())} · This is a computer-generated statement.</div>
+</body></html>`;
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdf = await page.pdf({ format: 'A4', margin: { top: '0', right: '0', bottom: '0', left: '0' }, printBackground: true });
+    return Buffer.from(pdf);
+  } catch (err) {
+    logger.error('Statement PDF generation failed', { clientId, err });
+    throw err;
+  } finally {
+    if (browser) await browser.close();
+  }
+}
+
 export async function generateInvoicePdf(invoiceId: string): Promise<Buffer> {
   const invoice = await fetchInvoiceForPdf(invoiceId);
   if (!invoice) throw new Error('Invoice not found');

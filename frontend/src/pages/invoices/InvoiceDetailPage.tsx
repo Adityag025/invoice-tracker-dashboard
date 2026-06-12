@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import { ArrowLeft, Download, Send, CheckCircle, XCircle, Paperclip, Trash2, ExternalLink, FileText, Image, File, CreditCard, Bell, BellOff } from 'lucide-react';
+import { ArrowLeft, Download, Send, CheckCircle, XCircle, Paperclip, Trash2, ExternalLink, FileText, Image, File, CreditCard, Bell, BellOff, ReceiptText } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useInvoice, useUpdateInvoiceStatus } from '../../hooks/useInvoices';
@@ -10,6 +10,7 @@ import { PageLoader } from '../../components/ui/LoadingSpinner';
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner';
 import { FileUpload } from '../../components/ui/FileUpload';
 import { RecordPaymentModal } from '../../components/ui/RecordPaymentModal';
+import { RaiseCreditNoteModal } from '../../components/ui/RaiseCreditNoteModal';
 import api from '../../lib/api';
 
 interface Payment {
@@ -62,6 +63,7 @@ export const InvoiceDetailPage = () => {
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showCreditNoteModal, setShowCreditNoteModal] = useState(false);
   const [sendingReminder, setSendingReminder] = useState(false);
 
   const { data: attachments = [] } = useQuery<Attachment[]>({
@@ -115,6 +117,21 @@ export const InvoiceDetailPage = () => {
       setSendingReminder(false);
     }
   };
+
+  const raiseCreditNote = useMutation({
+    mutationFn: (data: { type: 'FULL' | 'PARTIAL'; reason: string; amount: number }) =>
+      api.post('/credit-notes', { invoiceId: id, ...data }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['invoice', id] });
+      qc.invalidateQueries({ queryKey: ['credit-notes'] });
+      setShowCreditNoteModal(false);
+      toast.success('Credit note raised');
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to raise credit note';
+      toast.error(msg);
+    },
+  });
 
   const deleteAttachment = useMutation({
     mutationFn: (attachmentId: string) => api.delete(`/invoices/${id}/attachments/${attachmentId}`),
@@ -208,6 +225,11 @@ export const InvoiceDetailPage = () => {
           {['SENT', 'VIEWED', 'PART_PAID'].includes(invoice.status) && (
             <button className="btn-secondary text-green-700 border-green-200 hover:bg-green-50" onClick={() => transition('PAID')}>
               <CheckCircle className="w-4 h-4" /> Mark Paid
+            </button>
+          )}
+          {!['CANCELLED'].includes(invoice.status) && (
+            <button className="btn-secondary text-orange-600 border-orange-200 hover:bg-orange-50" onClick={() => setShowCreditNoteModal(true)}>
+              <ReceiptText className="w-4 h-4" /> Credit Note
             </button>
           )}
           {!['PAID', 'CANCELLED'].includes(invoice.status) && (
@@ -442,6 +464,16 @@ export const InvoiceDetailPage = () => {
           isSubmitting={recordPayment.isPending}
           onClose={() => setShowPaymentModal(false)}
           onConfirm={async (data) => { await recordPayment.mutateAsync(data); }}
+        />
+      )}
+
+      {showCreditNoteModal && (
+        <RaiseCreditNoteModal
+          invoiceTotal={invoice.total}
+          invoiceNumber={invoice.invoiceNumber}
+          isSubmitting={raiseCreditNote.isPending}
+          onClose={() => setShowCreditNoteModal(false)}
+          onConfirm={async (data) => { await raiseCreditNote.mutateAsync(data); }}
         />
       )}
     </div>
