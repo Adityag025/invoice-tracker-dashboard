@@ -13,7 +13,9 @@ import estimateRoutes from './routes/estimates.js';
 import creditNoteRoutes from './routes/credit-notes.js';
 import reportRoutes from './routes/reports.js';
 import attachmentRoutes from './routes/attachments.js';
+import reminderRoutes from './routes/reminders.js';
 import { escalateOverdueInvoices } from './jobs/overdueJob.js';
+import { processReminders } from './jobs/reminderJob.js';
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
@@ -29,6 +31,7 @@ app.use('/api/v1/projects', projectRoutes);
 app.use('/api/v1/invoices', invoiceRoutes);
 app.use('/api/v1/invoices/:id/payments', paymentRoutes);
 app.use('/api/v1/invoices/:id/attachments', attachmentRoutes);
+app.use('/api/v1/invoices/:id/reminders', reminderRoutes);
 app.use('/api/v1/estimates', estimateRoutes);
 app.use('/api/v1/credit-notes', creditNoteRoutes);
 app.use('/api/v1/reports', reportRoutes);
@@ -50,5 +53,11 @@ app.listen(PORT, () => {
   setInterval(
     () => escalateOverdueInvoices().catch(err => logger.error('Overdue job failed', { err })),
     6 * 60 * 60 * 1000
+  );
+  // Reminder emails — run once at startup then hourly
+  processReminders().catch(err => logger.error('Reminder job failed', { err }));
+  setInterval(
+    () => processReminders().catch(err => logger.error('Reminder job failed', { err })),
+    60 * 60 * 1000
   );
 });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import { ArrowLeft, Download, Send, CheckCircle, XCircle, Paperclip, Trash2, ExternalLink, FileText, Image, File } from 'lucide-react';
+import { ArrowLeft, Download, Send, CheckCircle, XCircle, Paperclip, Trash2, ExternalLink, FileText, Image, File, CreditCard, Bell, BellOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useInvoice, useUpdateInvoiceStatus } from '../../hooks/useInvoices';
@@ -9,7 +9,26 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { PageLoader } from '../../components/ui/LoadingSpinner';
 import { LoadingSpinner } from '../../components/ui/LoadingSpinner';
 import { FileUpload } from '../../components/ui/FileUpload';
+import { RecordPaymentModal } from '../../components/ui/RecordPaymentModal';
 import api from '../../lib/api';
+
+interface Payment {
+  id: string;
+  amount: number;
+  paymentDate: string;
+  method: string;
+  referenceNumber?: string;
+  notes?: string;
+  recordedBy?: { name: string };
+}
+
+interface ReminderLog {
+  id: string;
+  reminderType: string;
+  sentAt: string;
+  emailTo: string;
+  status: string;
+}
 
 interface Attachment {
   id: string;
@@ -42,12 +61,60 @@ export const InvoiceDetailPage = () => {
   const updateStatus = useUpdateInvoiceStatus();
   const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(false);
 
   const { data: attachments = [] } = useQuery<Attachment[]>({
     queryKey: ['attachments', id],
     queryFn: () => api.get(`/invoices/${id}/attachments`).then(r => r.data),
     enabled: !!id,
   });
+
+  const { data: payments = [] } = useQuery<Payment[]>({
+    queryKey: ['payments', id],
+    queryFn: () => api.get(`/invoices/${id}/payments`).then(r => r.data),
+    enabled: !!id,
+  });
+
+  const { data: reminderLogs = [] } = useQuery<ReminderLog[]>({
+    queryKey: ['reminders', id],
+    queryFn: () => api.get(`/invoices/${id}/reminders`).then(r => r.data),
+    enabled: !!id,
+  });
+
+  const recordPayment = useMutation({
+    mutationFn: (data: { amount: number; paymentDate: string; method: string; referenceNumber?: string; notes?: string }) =>
+      api.post(`/invoices/${id}/payments`, {
+        ...data,
+        paymentDate: new Date(data.paymentDate).toISOString(),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['payments', id] });
+      qc.invalidateQueries({ queryKey: ['invoice', id] });
+      setShowPaymentModal(false);
+      toast.success('Payment recorded');
+    },
+    onError: (e: unknown) => {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to record payment';
+      toast.error(msg);
+    },
+  });
+
+  const paidSoFar = payments.reduce((s, p) => s + p.amount, 0);
+
+  const sendReminder = async () => {
+    setSendingReminder(true);
+    try {
+      await api.post(`/invoices/${id}/reminders/send`);
+      qc.invalidateQueries({ queryKey: ['reminders', id] });
+      toast.success('Reminder sent');
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to send reminder';
+      toast.error(msg);
+    } finally {
+      setSendingReminder(false);
+    }
+  };
 
   const deleteAttachment = useMutation({
     mutationFn: (attachmentId: string) => api.delete(`/invoices/${id}/attachments/${attachmentId}`),
@@ -127,8 +194,19 @@ export const InvoiceDetailPage = () => {
               <Send className="w-4 h-4" /> Send Invoice
             </button>
           )}
+          {['SENT', 'VIEWED', 'PART_PAID', 'OVERDUE'].includes(invoice.status) && (
+            <button className="btn-primary" onClick={() => setShowPaymentModal(true)}>
+              <CreditCard className="w-4 h-4" /> Record Payment
+            </button>
+          )}
+          {['SENT', 'VIEWED', 'PART_PAID', 'OVERDUE'].includes(invoice.status) && (
+            <button className="btn-secondary" onClick={sendReminder} disabled={sendingReminder}>
+              {sendingReminder ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+              {sendingReminder ? 'Sending…' : 'Send Reminder'}
+            </button>
+          )}
           {['SENT', 'VIEWED', 'PART_PAID'].includes(invoice.status) && (
-            <button className="btn-primary" onClick={() => transition('PAID')}>
+            <button className="btn-secondary text-green-700 border-green-200 hover:bg-green-50" onClick={() => transition('PAID')}>
               <CheckCircle className="w-4 h-4" /> Mark Paid
             </button>
           )}
@@ -144,7 +222,7 @@ export const InvoiceDetailPage = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="card p-4">
           <p className="text-xs text-gray-500 mb-1">Issue Date</p>
           <p className="font-semibold">{format(new Date(invoice.issueDate), 'dd MMM yyyy')}</p>
@@ -156,6 +234,12 @@ export const InvoiceDetailPage = () => {
         <div className="card p-4">
           <p className="text-xs text-gray-500 mb-1">Total Amount</p>
           <p className="font-bold text-xl text-blue-600">{fmt(invoice.total)}</p>
+        </div>
+        <div className="card p-4">
+          <p className="text-xs text-gray-500 mb-1">Balance Due</p>
+          <p className={`font-bold text-xl ${invoice.total - paidSoFar <= 0 ? 'text-green-600' : 'text-orange-600'}`}>
+            {fmt(Math.max(0, invoice.total - paidSoFar))}
+          </p>
         </div>
       </div>
 
@@ -198,6 +282,89 @@ export const InvoiceDetailPage = () => {
           </tfoot>
         </table>
       </div>
+
+      {/* Payments */}
+      <div className="card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <CreditCard className="w-4 h-4 text-gray-500" />
+            <h3 className="font-semibold text-gray-900">Payments</h3>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{payments.length}</span>
+          </div>
+          {['SENT', 'VIEWED', 'PART_PAID', 'OVERDUE'].includes(invoice.status) && (
+            <button className="btn-primary text-sm py-1.5 px-3" onClick={() => setShowPaymentModal(true)}>
+              + Record Payment
+            </button>
+          )}
+        </div>
+
+        {payments.length > 0 ? (
+          <div className="overflow-hidden rounded-lg border border-gray-100">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Date</th>
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Method</th>
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Reference</th>
+                  <th className="text-left px-4 py-2 font-medium text-gray-500">Recorded By</th>
+                  <th className="text-right px-4 py-2 font-medium text-gray-500">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map(p => (
+                  <tr key={p.id} className="border-b border-gray-50 last:border-0">
+                    <td className="px-4 py-3 text-gray-700">{format(new Date(p.paymentDate), 'dd MMM yyyy')}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded">{p.method}</span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 font-mono text-xs">{p.referenceNumber ?? '—'}</td>
+                    <td className="px-4 py-3 text-gray-500">{p.recordedBy?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-green-600">{fmt(p.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-gray-50 border-t border-gray-200">
+                <tr>
+                  <td colSpan={4} className="px-4 py-2.5 text-right text-sm font-medium text-gray-700">Total Paid</td>
+                  <td className="px-4 py-2.5 text-right font-bold text-green-600">{fmt(paidSoFar)}</td>
+                </tr>
+                {paidSoFar < invoice.total && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-2 text-right text-sm font-medium text-gray-700">Balance Due</td>
+                    <td className="px-4 py-2 text-right font-bold text-orange-600">{fmt(invoice.total - paidSoFar)}</td>
+                  </tr>
+                )}
+              </tfoot>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-gray-400 text-center py-4">No payments recorded yet.</p>
+        )}
+      </div>
+
+      {/* Reminder Logs */}
+      {reminderLogs.length > 0 && (
+        <div className="card p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Bell className="w-4 h-4 text-gray-500" />
+            <h3 className="font-semibold text-gray-900">Reminder History</h3>
+            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{reminderLogs.length}</span>
+          </div>
+          <div className="space-y-2">
+            {reminderLogs.map(r => (
+              <div key={r.id} className="flex items-center gap-3 text-sm px-3 py-2 bg-gray-50 rounded-lg">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${r.status === 'SENT' ? 'bg-green-400' : 'bg-red-400'}`} />
+                <span className="font-medium text-gray-700 capitalize">{r.reminderType.replace(/_/g, ' ').toLowerCase()}</span>
+                <span className="text-gray-400">→ {r.emailTo}</span>
+                <span className="text-gray-400 ml-auto">{format(new Date(r.sentAt), 'dd MMM yyyy, HH:mm')}</span>
+                <span className={`text-xs px-2 py-0.5 rounded ${r.status === 'SENT' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                  {r.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Attachments */}
       <div className="card p-5">
@@ -266,6 +433,16 @@ export const InvoiceDetailPage = () => {
             ))}
           </div>
         </div>
+      )}
+
+      {showPaymentModal && (
+        <RecordPaymentModal
+          invoiceTotal={invoice.total}
+          paidSoFar={paidSoFar}
+          isSubmitting={recordPayment.isPending}
+          onClose={() => setShowPaymentModal(false)}
+          onConfirm={async (data) => { await recordPayment.mutateAsync(data); }}
+        />
       )}
     </div>
   );
