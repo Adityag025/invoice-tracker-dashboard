@@ -1,6 +1,6 @@
-import { TaxType } from '@prisma/client';
+const AGENCY_STATE_CODE = process.env.AGENCY_STATE_CODE ?? '27';
 
-const AGENCY_STATE_CODE = process.env.AGENCY_STATE_CODE ?? '27'; // Maharashtra default
+export type TaxType = 'CGST_SGST' | 'IGST';
 
 export interface LineItemInput {
   description: string;

@@ -35,7 +35,7 @@ router.post('/', validate(paymentSchema), async (req: AuthRequest, res: Response
     });
     await tx.invoice.update({ where: { id }, data: { status: newStatus } });
     await tx.invoiceEvent.create({
-      data: { invoiceId: id, eventType: 'PAYMENT_RECORDED', actorId: req.user!.userId, metadata: { amount, method, newStatus } },
+      data: { invoiceId: id, eventType: 'PAYMENT_RECORDED', actorId: req.user!.userId, metadata: JSON.stringify({ amount, method, newStatus }) },
     });
     return p;
   });

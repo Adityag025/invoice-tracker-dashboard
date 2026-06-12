@@ -138,7 +138,7 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
   const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const inv = await tx.invoice.update({ where: { id: req.params.id }, data: { status } });
     await tx.invoiceEvent.create({
-      data: { invoiceId: inv.id, eventType: `STATUS_${status}`, actorId: req.user!.userId, metadata: { from: invoice.status, to: status } },
+      data: { invoiceId: inv.id, eventType: `STATUS_${status}`, actorId: req.user!.userId, metadata: JSON.stringify({ from: invoice.status, to: status }) },
     });
     return inv;
   });

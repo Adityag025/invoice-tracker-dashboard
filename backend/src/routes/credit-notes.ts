@@ -38,7 +38,7 @@ router.post('/', validate(creditNoteSchema), async (req: AuthRequest, res: Respo
       }
     }
     await tx.invoiceEvent.create({
-      data: { invoiceId, eventType: 'CREDIT_NOTE_RAISED', actorId: req.user!.userId, metadata: { cnNumber, amount } },
+      data: { invoiceId, eventType: 'CREDIT_NOTE_RAISED', actorId: req.user!.userId, metadata: JSON.stringify({ cnNumber, amount }) },
     });
     return cn;
   });

@@ -24,7 +24,7 @@ export async function escalateOverdueInvoices(): Promise<number> {
         data: {
           invoiceId: inv.id,
           eventType: 'AUTO_OVERDUE',
-          metadata: { escalatedAt: now.toISOString() },
+          metadata: JSON.stringify({ escalatedAt: now.toISOString() }),
         },
       })
     ),
