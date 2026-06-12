@@ -1,11 +1,14 @@
 import { Router, Response, Request } from 'express';
 import { z } from 'zod';
+import path from 'path';
+import fs from 'fs';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 import { validate } from '../middleware/validate.js';
 import { upload } from '../middleware/upload.js';
 import { storeFile } from '../services/storage.service.js';
+import { getTempPoDir } from '../services/po-extract.service.js';
 import { calcLineItems, calcTotals } from '../services/gst.service.js';
 import { generateEstimateNumber, generateInvoiceNumber } from '../services/invoice-number.service.js';
 
@@ -138,9 +141,12 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/v1/estimates/:id/purchase-order — attach PO document
+// Accepts either a new file upload OR a tempFileId from /po/extract
 router.post(
   '/:id/purchase-order',
   (req: Request, res: Response, next) => {
+    // Skip multer if the client is using a tempFileId from extraction
+    if (req.body?.tempFileId) { next(); return; }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upload.single('file')(req as any, res as any, (err) => {
       if (err) { res.status(400).json({ error: (err as Error).message }); return; }
@@ -152,6 +158,7 @@ router.post(
       poNumber: z.string().min(1),
       poDate: z.string(),
       poValue: z.coerce.number().positive(),
+      tempFileId: z.string().optional(),
     });
     const parsed = poSchema.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: 'Validation failed', issues: parsed.error.flatten() }); return; }
@@ -160,7 +167,18 @@ router.post(
     if (!estimate) { res.status(404).json({ error: 'Estimate not found' }); return; }
 
     let documentUrl: string | undefined;
-    if (req.file) {
+
+    if (parsed.data.tempFileId) {
+      // Move temp file to permanent uploads dir
+      const tmpPath = path.join(getTempPoDir(), parsed.data.tempFileId);
+      if (fs.existsSync(tmpPath)) {
+        const ext = path.extname(parsed.data.tempFileId);
+        const permName = parsed.data.tempFileId.replace(ext, `-po${ext}`);
+        const permPath = path.resolve(process.cwd(), 'uploads', permName);
+        fs.renameSync(tmpPath, permPath);
+        documentUrl = `/uploads/${permName}`;
+      }
+    } else if (req.file) {
       const stored = await storeFile(req.file);
       documentUrl = stored.url;
     }

@@ -77,9 +77,12 @@ model Invoice {
   subtotal      Float
   taxTotal      Float    @map("tax_total")
   total         Float
-  notes         String?
-  poNumber      String?  @map("po_number")
-  createdById   String   @map("created_by")
+  notes              String?
+  poNumber           String?  @map("po_number")
+  razorpayLinkId     String?  @map("razorpay_link_id")
+  razorpayLinkUrl    String?  @map("razorpay_link_url")
+  razorpayLinkStatus String?  @map("razorpay_link_status")
+  createdById        String   @map("created_by")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 

@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Upload, ExternalLink, FileText } from 'lucide-react';
+import { ArrowLeft, CheckCircle, XCircle, RefreshCw, Upload, ExternalLink, FileText, Sparkles, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { StatusBadge } from '../../components/ui/StatusBadge';
-import { PageLoader } from '../../components/ui/LoadingSpinner';
+import { PageLoader, LoadingSpinner } from '../../components/ui/LoadingSpinner';
 import { FileUpload } from '../../components/ui/FileUpload';
 import api from '../../lib/api';
 
@@ -40,8 +40,11 @@ export const EstimateDetailPage = () => {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [uploadingPo, setUploadingPo] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [showPoForm, setShowPoForm] = useState(false);
   const [poFields, setPoFields] = useState({ poNumber: '', poDate: '', poValue: '' });
+  const [tempFileId, setTempFileId] = useState<string | null>(null);
+  const [extractConfidence, setExtractConfidence] = useState<'high' | 'low' | null>(null);
 
   const { data: estimate, isLoading } = useQuery<Estimate>({
     queryKey: ['estimate', id],
@@ -71,27 +74,62 @@ export const EstimateDetailPage = () => {
     },
   });
 
-  const handlePoUpload = async (file: File) => {
+  // Step 1: file dropped → extract fields via Claude
+  const handlePoFileDrop = async (file: File) => {
+    setExtracting(true);
+    setTempFileId(null);
+    setExtractConfidence(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await api.post('/po/extract', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const { tempFileId: tid, fields } = res.data as {
+        tempFileId: string;
+        fields: { poNumber: string | null; poDate: string | null; poValue: number | null; confidence: 'high' | 'low' };
+      };
+      setTempFileId(tid);
+      setExtractConfidence(fields.confidence);
+      setPoFields({
+        poNumber: fields.poNumber ?? '',
+        poDate: fields.poDate ?? '',
+        poValue: fields.poValue?.toString() ?? '',
+      });
+      if (fields.confidence === 'high') {
+        toast.success('Fields extracted — please verify before saving');
+      } else {
+        toast('Some fields could not be extracted. Fill in manually.', { icon: '⚠️' });
+      }
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Extraction failed';
+      // Graceful fallback: let user fill manually
+      toast(msg + ' — please fill fields manually.', { icon: '⚠️' });
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  // Step 2: user confirms → save PO using tempFileId (no re-upload)
+  const handlePoSave = async () => {
     if (!poFields.poNumber || !poFields.poDate || !poFields.poValue) {
-      toast.error('Fill in PO number, date, and value before uploading');
+      toast.error('Fill in PO number, date, and value');
       return;
     }
     setUploadingPo(true);
     try {
-      const form = new FormData();
-      form.append('file', file);
-      form.append('poNumber', poFields.poNumber);
-      form.append('poDate', new Date(poFields.poDate).toISOString());
-      form.append('poValue', poFields.poValue);
-      await api.post(`/estimates/${id}/purchase-order`, form, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      await api.post(`/estimates/${id}/purchase-order`, {
+        poNumber: poFields.poNumber,
+        poDate: new Date(poFields.poDate).toISOString(),
+        poValue: Number(poFields.poValue),
+        ...(tempFileId ? { tempFileId } : {}),
       });
       qc.invalidateQueries({ queryKey: ['estimate', id] });
       setPoFields({ poNumber: '', poDate: '', poValue: '' });
+      setTempFileId(null);
+      setExtractConfidence(null);
       setShowPoForm(false);
       toast.success('Purchase order attached');
     } catch (e: unknown) {
-      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Upload failed';
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Save failed';
       toast.error(msg);
     } finally {
       setUploadingPo(false);
@@ -243,6 +281,41 @@ export const EstimateDetailPage = () => {
 
         {showPoForm && (
           <div className="border border-blue-200 rounded-xl p-4 bg-blue-50 space-y-4">
+
+            {/* AI extraction banner */}
+            {extractConfidence === 'high' && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-green-700 text-xs font-medium">
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                Fields extracted by AI — verify before saving
+              </div>
+            )}
+            {extractConfidence === 'low' && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-700 text-xs font-medium">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                Partial extraction — some fields need manual input
+              </div>
+            )}
+
+            {/* Drop zone — shown when no file extracted yet */}
+            {!tempFileId && (
+              <div>
+                {extracting ? (
+                  <div className="flex items-center justify-center gap-2 py-6 text-sm text-gray-500">
+                    <LoadingSpinner size="sm" />
+                    Extracting PO fields with AI…
+                  </div>
+                ) : (
+                  <FileUpload
+                    onUpload={handlePoFileDrop}
+                    isUploading={false}
+                    label="Drop PO document — fields will be extracted automatically"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                  />
+                )}
+              </div>
+            )}
+
+            {/* Editable fields — shown after extraction (or always so user can fill manually) */}
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">PO Number *</label>
@@ -273,15 +346,25 @@ export const EstimateDetailPage = () => {
                 />
               </div>
             </div>
-            <FileUpload
-              onUpload={handlePoUpload}
-              isUploading={uploadingPo}
-              label="Upload PO document (PDF or image)"
-              accept=".pdf,.png,.jpg,.jpeg"
-            />
+
             <div className="flex gap-2 justify-end">
-              <button className="btn-secondary text-sm" onClick={() => { setShowPoForm(false); setPoFields({ poNumber: '', poDate: '', poValue: '' }); }}>
+              <button
+                className="btn-secondary text-sm"
+                onClick={() => {
+                  setShowPoForm(false);
+                  setPoFields({ poNumber: '', poDate: '', poValue: '' });
+                  setTempFileId(null);
+                  setExtractConfidence(null);
+                }}
+              >
                 Cancel
+              </button>
+              <button
+                className="btn-primary text-sm"
+                onClick={handlePoSave}
+                disabled={uploadingPo || extracting}
+              >
+                {uploadingPo ? 'Saving…' : 'Save PO'}
               </button>
             </div>
           </div>

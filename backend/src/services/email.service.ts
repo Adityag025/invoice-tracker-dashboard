@@ -20,12 +20,15 @@ const fmtINR = (n: number) =>
 
 function buildSubject(type: string, invoiceNumber: string): string {
   switch (type) {
-    case 'DUE_SOON':   return `Payment Reminder: Invoice ${invoiceNumber} is due in 7 days`;
-    case 'DUE_TODAY':  return `Payment Due Today: Invoice ${invoiceNumber}`;
-    case 'OVERDUE_3':  return `Overdue Notice: Invoice ${invoiceNumber} (3 days overdue)`;
-    case 'OVERDUE_7':  return `Overdue Notice: Invoice ${invoiceNumber} (7 days overdue)`;
-    case 'OVERDUE_14': return `Final Notice: Invoice ${invoiceNumber} (14 days overdue)`;
-    default:           return `Invoice Reminder: ${invoiceNumber}`;
+    case 'DUE_SOON':        return `Payment Reminder: Invoice ${invoiceNumber} is due in 7 days`;
+    case 'DUE_TODAY':       return `Payment Due Today: Invoice ${invoiceNumber}`;
+    case 'OVERDUE_3':       return `Overdue Notice: Invoice ${invoiceNumber} (3 days overdue)`;
+    case 'OVERDUE_7':       return `Overdue Notice: Invoice ${invoiceNumber} (7 days overdue)`;
+    case 'OVERDUE_14':      return `Final Notice: Invoice ${invoiceNumber} (14 days overdue)`;
+    case 'PENDING_APPROVAL': return `Approval Required: Invoice ${invoiceNumber}`;
+    case 'APPROVED':        return `Invoice ${invoiceNumber} Approved ✓`;
+    case 'REJECTED':        return `Invoice ${invoiceNumber} Needs Revision`;
+    default:                return `Invoice Reminder: ${invoiceNumber}`;
   }
 }
 

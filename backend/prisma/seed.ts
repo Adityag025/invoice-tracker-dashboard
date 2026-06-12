@@ -6,20 +6,25 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('Seeding database…');
 
-  const adminHash = await bcrypt.hash('admin123', 12);
-  const managerHash = await bcrypt.hash('manager123', 12);
+  const roleAccounts = [
+    { name: 'Rahul Sharma',   email: 'ceo@agency.com',        pw: 'Agency@123', role: 'CEO' },
+    { name: 'Priya Nair',     email: 'director@agency.com',   pw: 'Agency@123', role: 'ACCOUNT_DIRECTOR' },
+    { name: 'Arjun Mehta',    email: 'podhead@agency.com',    pw: 'Agency@123', role: 'POD_HEAD' },
+    { name: 'Sneha Kapoor',   email: 'manager@agency.com',    pw: 'Agency@123', role: 'ACCOUNT_MANAGER' },
+    { name: 'Rohan Verma',    email: 'submanager@agency.com', pw: 'Agency@123', role: 'SUB_MANAGER' },
+  ];
 
-  const admin = await prisma.user.upsert({
-    where: { email: 'admin@agency.com' },
-    update: {},
-    create: { name: 'Admin User', email: 'admin@agency.com', passwordHash: adminHash, role: 'ADMIN' },
-  });
+  for (const acc of roleAccounts) {
+    await prisma.user.upsert({
+      where: { email: acc.email },
+      update: { role: acc.role },
+      create: { name: acc.name, email: acc.email, passwordHash: await bcrypt.hash(acc.pw, 12), role: acc.role },
+    });
+  }
 
-  const manager = await prisma.user.upsert({
-    where: { email: 'manager@agency.com' },
-    update: {},
-    create: { name: 'Account Manager', email: 'manager@agency.com', passwordHash: managerHash, role: 'MANAGER' },
-  });
+  // Keep backward-compat alias for old admin seed
+  const admin    = await prisma.user.findFirst({ where: { role: 'CEO' } });
+  const manager  = await prisma.user.findFirst({ where: { role: 'ACCOUNT_MANAGER' } });
 
   const client1 = await prisma.client.upsert({
     where: { id: 'seed-client-1' },
@@ -79,9 +84,12 @@ async function main() {
   console.log(`
 ✅ Seed complete!
 
-Users:
-  admin@agency.com    / admin123    (ADMIN)
-  manager@agency.com  / manager123  (MANAGER)
+Login credentials (password: Agency@123 for all):
+  ceo@agency.com        → CEO
+  director@agency.com   → Account Director
+  podhead@agency.com    → Pod Head
+  manager@agency.com    → Account Manager
+  submanager@agency.com → Sub Manager
 
 Clients:
   ${client1.name} (intra-state: CGST+SGST)

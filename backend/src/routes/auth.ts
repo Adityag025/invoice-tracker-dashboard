@@ -16,7 +16,7 @@ const registerSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(8),
-  role: z.enum(['ADMIN', 'MANAGER']).optional(),
+  role: z.enum(['CEO', 'ACCOUNT_DIRECTOR', 'POD_HEAD', 'ACCOUNT_MANAGER', 'SUB_MANAGER']).optional(),
 });
 
 router.post('/login', validate(loginSchema), async (req: Request, res: Response) => {
@@ -43,7 +43,7 @@ router.post('/register', validate(registerSchema), async (req: Request, res: Res
   }
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.create({
-    data: { name, email, passwordHash, role: role ?? 'MANAGER' },
+    data: { name, email, passwordHash, role: role ?? 'ACCOUNT_MANAGER' },
   });
   const payload = { userId: user.id, role: user.role };
   res.status(201).json({

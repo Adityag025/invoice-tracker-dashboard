@@ -1,4 +1,4 @@
-export type UserRole = 'ADMIN' | 'MANAGER';
+export type UserRole = 'CEO' | 'ACCOUNT_DIRECTOR' | 'POD_HEAD' | 'ACCOUNT_MANAGER' | 'SUB_MANAGER';
 export type ProjectType = 'RETAINER' | 'ONE_OFF';
 export type TaxType = 'CGST_SGST' | 'IGST';
 export type PaymentMethod = 'NEFT' | 'RTGS' | 'UPI' | 'CHEQUE' | 'CASH';
@@ -73,6 +73,9 @@ export interface Invoice {
   items?: InvoiceItem[];
   payments?: Payment[];
   events?: InvoiceEvent[];
+  razorpayLinkId?: string;
+  razorpayLinkUrl?: string;
+  razorpayLinkStatus?: string;
   createdAt: string;
 }
 

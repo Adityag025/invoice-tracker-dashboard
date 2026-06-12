@@ -1,19 +1,26 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, FileText, FileCheck, Users, BarChart3, LogOut, Receipt, FileX } from 'lucide-react';
+import { LayoutDashboard, FileText, FileCheck, Users, BarChart3, LogOut, Receipt, FileX, UsersRound } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
+import { hasMinRole, ROLE_LABEL } from '../../lib/roles';
+import type { UserRole } from '../../types';
 import { clsx } from 'clsx';
 
 const NAV = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/invoices', label: 'Invoices', icon: FileText },
-  { to: '/estimates', label: 'Estimates', icon: FileCheck },
-  { to: '/credit-notes', label: 'Credit Notes', icon: FileX },
-  { to: '/clients', label: 'Clients', icon: Users },
-  { to: '/reports', label: 'Reports', icon: BarChart3 },
+  { to: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard,  minRole: undefined },
+  { to: '/invoices',     label: 'Invoices',     icon: FileText,         minRole: undefined },
+  { to: '/estimates',    label: 'Estimates',    icon: FileCheck,        minRole: undefined },
+  { to: '/credit-notes', label: 'Credit Notes', icon: FileX,            minRole: undefined },
+  { to: '/clients',      label: 'Clients',      icon: Users,            minRole: undefined },
+  { to: '/reports',      label: 'Reports',      icon: BarChart3,        minRole: undefined },
+  { to: '/team',         label: 'Team',         icon: UsersRound,       minRole: 'ACCOUNT_MANAGER' as UserRole },
 ];
 
 export const Sidebar = () => {
   const { user, logout } = useAuthStore();
+
+  const visibleNav = NAV.filter(item =>
+    !item.minRole || hasMinRole(user?.role, item.minRole)
+  );
 
   return (
     <aside className="fixed left-0 top-0 h-full w-64 bg-gray-900 flex flex-col z-30">
@@ -28,7 +35,7 @@ export const Sidebar = () => {
       </div>
 
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV.map(({ to, label, icon: Icon }) => (
+        {visibleNav.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
@@ -52,7 +59,9 @@ export const Sidebar = () => {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-white text-sm font-medium truncate">{user?.name}</p>
-            <p className="text-gray-400 text-xs truncate">{user?.role}</p>
+            <p className="text-gray-400 text-xs truncate">
+              {ROLE_LABEL[user?.role as UserRole] ?? user?.role}
+            </p>
           </div>
         </div>
         <button

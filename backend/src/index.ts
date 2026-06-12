@@ -14,6 +14,11 @@ import creditNoteRoutes from './routes/credit-notes.js';
 import reportRoutes from './routes/reports.js';
 import attachmentRoutes from './routes/attachments.js';
 import reminderRoutes from './routes/reminders.js';
+import approvalRoutes from './routes/approval.js';
+import paymentLinkRoutes from './routes/payment-links.js';
+import webhookRoutes from './routes/webhooks.js';
+import poExtractRoutes from './routes/po-extract.js';
+import userRoutes from './routes/users.js';
 import { escalateOverdueInvoices } from './jobs/overdueJob.js';
 import { processReminders } from './jobs/reminderJob.js';
 
@@ -32,7 +37,12 @@ app.use('/api/v1/invoices', invoiceRoutes);
 app.use('/api/v1/invoices/:id/payments', paymentRoutes);
 app.use('/api/v1/invoices/:id/attachments', attachmentRoutes);
 app.use('/api/v1/invoices/:id/reminders', reminderRoutes);
+app.use('/api/v1/invoices/:id/approval', approvalRoutes);
+app.use('/api/v1/invoices/:id/payment-link', paymentLinkRoutes);
+app.use('/webhooks', webhookRoutes);
 app.use('/api/v1/estimates', estimateRoutes);
+app.use('/api/v1/po', poExtractRoutes);
+app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/credit-notes', creditNoteRoutes);
 app.use('/api/v1/reports', reportRoutes);
 
