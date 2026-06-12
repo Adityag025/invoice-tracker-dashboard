@@ -11,13 +11,15 @@ import paymentRoutes from './routes/payments.js';
 import estimateRoutes from './routes/estimates.js';
 import creditNoteRoutes from './routes/credit-notes.js';
 import reportRoutes from './routes/reports.js';
+import { escalateOverdueInvoices } from './jobs/overdueJob.js';
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
 app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:5173', credentials: true }));
 app.use(express.json());
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }) as any);
 
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/clients', clientRoutes);
@@ -35,4 +37,12 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => logger.info(`Backend running on port ${PORT}`));
+app.listen(PORT, () => {
+  logger.info(`Backend running on port ${PORT}`);
+  // Run overdue escalation at startup then every 6 hours
+  escalateOverdueInvoices().catch(err => logger.error('Overdue job failed', { err }));
+  setInterval(
+    () => escalateOverdueInvoices().catch(err => logger.error('Overdue job failed', { err })),
+    6 * 60 * 60 * 1000
+  );
+});

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { Prisma, Payment } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 import { validate } from '../middleware/validate.js';
@@ -21,10 +22,10 @@ router.post('/', validate(creditNoteSchema), async (req: AuthRequest, res: Respo
   if (!invoice) { res.status(404).json({ error: 'Invoice not found' }); return; }
   if (invoice.status === 'CANCELLED') { res.status(400).json({ error: 'Invoice already cancelled' }); return; }
 
-  const totalPaid = invoice.payments.reduce((s, p) => s + p.amount, 0);
+  const totalPaid = invoice.payments.reduce((s: number, p: Payment) => s + p.amount, 0);
   const cnNumber = await generateCreditNoteNumber();
 
-  const creditNote = await prisma.$transaction(async (tx) => {
+  const creditNote = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const cn = await tx.creditNote.create({
       data: { cnNumber, invoiceId, type, reason, amount, issuedById: req.user!.userId },
     });

@@ -1,11 +1,13 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 import { validate } from '../middleware/validate.js';
 import { calcLineItems, calcTotals } from '../services/gst.service.js';
 import { generateInvoiceNumber } from '../services/invoice-number.service.js';
 import { logger } from '../lib/logger.js';
+import { generateInvoicePdf } from '../services/pdf.service.js';
 
 const router = Router();
 router.use(authenticate);
@@ -74,7 +76,7 @@ router.post('/', validate(createInvoiceSchema), async (req: AuthRequest, res: Re
   const { subtotal, taxTotal, total } = calcTotals(calcedItems);
   const invoiceNumber = await generateInvoiceNumber();
 
-  const invoice = await prisma.$transaction(async (tx) => {
+  const invoice = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const inv = await tx.invoice.create({
       data: {
         invoiceNumber,
@@ -133,7 +135,7 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const inv = await tx.invoice.update({ where: { id: req.params.id }, data: { status } });
     await tx.invoiceEvent.create({
       data: { invoiceId: inv.id, eventType: `STATUS_${status}`, actorId: req.user!.userId, metadata: { from: invoice.status, to: status } },
@@ -146,8 +148,16 @@ router.patch('/:id/status', async (req: AuthRequest, res: Response) => {
 });
 
 router.get('/:id/pdf', async (req: AuthRequest, res: Response) => {
-  // PDF generation placeholder — Puppeteer implementation added in PDF service
-  res.status(501).json({ error: 'PDF generation not yet configured — set PUPPETEER_ENABLED=true' });
+  try {
+    const pdf = await generateInvoicePdf(req.params.id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="invoice-${req.params.id}.pdf"`);
+    res.send(pdf);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'PDF generation failed';
+    logger.error('PDF route error', { id: req.params.id, err: msg });
+    res.status(500).json({ error: msg });
+  }
 });
 
 export default router;

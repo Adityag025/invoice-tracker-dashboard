@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { Payment } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 
@@ -20,7 +21,7 @@ router.get('/ar-aging', async (req: AuthRequest, res: Response) => {
 
   const buckets = { '0-30': [], '31-60': [], '61-90': [], '90+': [] } as Record<string, unknown[]>;
   for (const inv of invoices) {
-    const totalPaid = inv.payments.reduce((s, p) => s + p.amount, 0);
+    const totalPaid = inv.payments.reduce((s: number, p: Payment) => s + p.amount, 0);
     const outstanding = inv.total - totalPaid;
     if (outstanding <= 0) continue;
     const days = Math.floor((now.getTime() - new Date(inv.dueDate).getTime()) / 86400000);

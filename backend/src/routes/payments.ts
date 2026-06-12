@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { Prisma, Payment } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 import { validate } from '../middleware/validate.js';
@@ -25,10 +26,10 @@ router.post('/', validate(paymentSchema), async (req: AuthRequest, res: Response
   if (invoice.status === 'CANCELLED') { res.status(400).json({ error: 'Cannot record payment on cancelled invoice' }); return; }
 
   const { amount, paymentDate, method, referenceNumber, notes } = req.body;
-  const totalPaid = invoice.payments.reduce((s, p) => s + p.amount, 0) + amount;
+  const totalPaid = invoice.payments.reduce((s: number, p: Payment) => s + p.amount, 0) + amount;
   const newStatus = totalPaid >= invoice.total ? 'PAID' : 'PART_PAID';
 
-  const payment = await prisma.$transaction(async (tx) => {
+  const payment = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const p = await tx.payment.create({
       data: { invoiceId: id, amount, paymentDate: new Date(paymentDate), method, referenceNumber, notes, recordedById: req.user!.userId },
     });

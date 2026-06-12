@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { Prisma, TaxType } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { authenticate, AuthRequest } from '../middleware/authenticate.js';
 import { validate } from '../middleware/validate.js';
@@ -96,7 +97,7 @@ router.post('/:id/convert', async (req: AuthRequest, res: Response) => {
   const invoiceNumber = await generateInvoiceNumber();
   const latestPO = estimate.purchaseOrders[estimate.purchaseOrders.length - 1];
 
-  const invoice = await prisma.$transaction(async (tx) => {
+  const invoice = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const inv = await tx.invoice.create({
       data: {
         invoiceNumber,
@@ -110,7 +111,7 @@ router.post('/:id/convert', async (req: AuthRequest, res: Response) => {
         poNumber: latestPO?.poNumber,
         createdById: req.user!.userId,
         items: {
-          create: estimate.items.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }) => ({
+          create: estimate.items.map(({ description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal }: { description: string; hsnSac: string | null; quantity: number; unitRate: number; taxRate: number; taxType: TaxType; lineTotal: number }) => ({
             description, hsnSac, quantity, unitRate, taxRate, taxType, lineTotal,
           })),
         },

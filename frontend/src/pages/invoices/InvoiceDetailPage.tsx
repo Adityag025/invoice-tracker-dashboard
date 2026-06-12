@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
 import { ArrowLeft, Download, Send, CheckCircle, XCircle } from 'lucide-react';
@@ -5,6 +6,8 @@ import toast from 'react-hot-toast';
 import { useInvoice, useUpdateInvoiceStatus } from '../../hooks/useInvoices';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { PageLoader } from '../../components/ui/LoadingSpinner';
+import { LoadingSpinner } from '../../components/ui/LoadingSpinner';
+import api from '../../lib/api';
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(n);
@@ -14,6 +17,24 @@ export const InvoiceDetailPage = () => {
   const navigate = useNavigate();
   const { data: invoice, isLoading } = useInvoice(id!);
   const updateStatus = useUpdateInvoiceStatus();
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+
+  const downloadPdf = async () => {
+    setDownloadingPdf(true);
+    try {
+      const res = await api.get(`/invoices/${id}/pdf`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${invoice?.invoiceNumber ?? id}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error('PDF generation failed');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
 
   const transition = async (status: string) => {
     try {
@@ -58,8 +79,9 @@ export const InvoiceDetailPage = () => {
               <XCircle className="w-4 h-4" /> Cancel
             </button>
           )}
-          <button className="btn-secondary">
-            <Download className="w-4 h-4" /> PDF
+          <button className="btn-secondary" onClick={downloadPdf} disabled={downloadingPdf}>
+            {downloadingPdf ? <LoadingSpinner size="sm" /> : <Download className="w-4 h-4" />}
+            {downloadingPdf ? 'Generating…' : 'PDF'}
           </button>
         </div>
       </div>
